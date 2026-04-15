@@ -5,7 +5,7 @@ import FormatSelector from "@/components/FormatSelector";
 import ReferencePanel from "@/components/ReferencePanel";
 import PitchCanvas from "@/components/PitchCanvas";
 import SessionPlanner, { type Drill } from "@/components/SessionPlanner";
-import { estimateGPS } from "@/lib/gps-targets";
+import { estimateGPSRange, type GPSRangeEstimate } from "@/lib/gps-targets";
 import type { SeedConfig } from "@/components/ReferencePanel";
 
 function StepHeader({ n, title, subtitle }: { n: number; title: string; subtitle?: string }) {
@@ -29,6 +29,14 @@ type PendingDrill = {
   refLabel: string;
 };
 
+const GPS_LABELS: Record<string, { label: string; unit: string }> = {
+  distance: { label: "Dist",   unit: "m" },
+  hsr:      { label: "HSR",    unit: "m" },
+  sprint:   { label: "Sprint", unit: "m" },
+  accels:   { label: "Accels", unit: "" },
+  decels:   { label: "Decels", unit: "" },
+};
+
 function DrillModal({
   pending,
   format,
@@ -42,19 +50,32 @@ function DrillModal({
   onConfirm: (drill: Drill) => void;
   onCancel: () => void;
 }) {
-  const defaultGps = estimateGPS(pending.rpa, 15);
   const [name, setName] = useState(`${format} drill`);
   const [duration, setDuration] = useState(15);
   const [rpe, setRpe] = useState(7);
-  const [gps, setGps] = useState(defaultGps);
+  // gpsRange tracks low/mid/high; mid is the editable value
+  const [gpsRange, setGpsRange] = useState<GPSRangeEstimate>(
+    () => estimateGPSRange(pending.rpa, 15)
+  );
 
-  // Re-estimate when duration changes
+  // Re-estimate ranges when duration changes; preserve any manual mid overrides
   function handleDuration(d: number) {
     setDuration(d);
-    setGps(estimateGPS(pending.rpa, d));
+    setGpsRange(estimateGPSRange(pending.rpa, d));
+  }
+
+  // Allow manual override of the mid value while keeping range context
+  function handleGpsChange(k: keyof GPSRangeEstimate, val: number) {
+    setGpsRange((prev) => ({ ...prev, [k]: { ...prev[k], mid: val } }));
   }
 
   function handleConfirm() {
+    // Drill stores the mid (editable) values as the working GPS estimate
+    const gps = (Object.keys(gpsRange) as (keyof GPSRangeEstimate)[]).reduce(
+      (acc, k) => { acc[k] = gpsRange[k].mid; return acc; },
+      {} as Record<string, number>
+    ) as import("@/lib/gps-targets").GPSEstimate;
+
     const drill: Drill = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       name,
@@ -68,6 +89,9 @@ function DrillModal({
     };
     onConfirm(drill);
   }
+
+  // Suppress unused variable warning — seed is required by parent typing
+  void seed;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
@@ -100,11 +124,7 @@ function DrillModal({
                 Duration: <span className="text-white font-semibold">{duration} min</span>
               </label>
               <input
-                type="range"
-                min={5}
-                max={45}
-                step={5}
-                value={duration}
+                type="range" min={5} max={45} step={5} value={duration}
                 onChange={(e) => handleDuration(Number(e.target.value))}
                 className="w-full accent-green-500"
               />
@@ -119,11 +139,7 @@ function DrillModal({
                 RPE: <span className="text-white font-semibold">{rpe}</span>
               </label>
               <input
-                type="range"
-                min={1}
-                max={10}
-                step={1}
-                value={rpe}
+                type="range" min={1} max={10} step={1} value={rpe}
                 onChange={(e) => setRpe(Number(e.target.value))}
                 className="w-full accent-green-500"
               />
@@ -133,28 +149,32 @@ function DrillModal({
             </div>
           </div>
 
-          {/* GPS estimates */}
+          {/* GPS estimates with uncertainty ranges */}
           <div>
-            <p className="text-xs text-zinc-400 mb-2">
-              Estimated GPS output{" "}
-              <span className="text-zinc-600">(research-based · editable)</span>
-            </p>
+            <div className="flex items-baseline justify-between mb-2">
+              <p className="text-xs text-zinc-400">
+                Estimated GPS output{" "}
+                <span className="text-zinc-600">(editable)</span>
+              </p>
+              <p className="text-xs text-zinc-600">varies ±15–40% with player work rate</p>
+            </div>
             <div className="grid grid-cols-5 gap-2">
               {(["distance","hsr","sprint","accels","decels"] as const).map((k) => {
-                const labels: Record<string, string> = {
-                  distance: "Dist (m)", hsr: "HSR (m)", sprint: "Sprint (m)",
-                  accels: "Accels", decels: "Decels",
-                };
+                const { label, unit } = GPS_LABELS[k];
+                const { low, mid, high } = gpsRange[k];
                 return (
                   <div key={k}>
-                    <label className="text-xs text-zinc-500 block mb-1 leading-tight">{labels[k]}</label>
+                    <label className="text-xs text-zinc-500 block mb-1 leading-tight">
+                      {label}{unit ? ` (${unit})` : ""}
+                    </label>
                     <input
-                      type="number"
-                      min={0}
-                      value={gps[k]}
-                      onChange={(e) => setGps((g) => ({ ...g, [k]: Number(e.target.value) }))}
+                      type="number" min={0} value={mid}
+                      onChange={(e) => handleGpsChange(k, Number(e.target.value))}
                       className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-green-600"
                     />
+                    <p className="text-xs text-zinc-700 mt-1 leading-tight font-mono">
+                      {low.toLocaleString()}–{high.toLocaleString()}
+                    </p>
                   </div>
                 );
               })}

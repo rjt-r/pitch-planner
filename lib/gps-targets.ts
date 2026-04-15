@@ -150,6 +150,36 @@ export function estimateGPS(rpa: number, durationMins: number): GPSEstimate {
   };
 }
 
+// ── GPS range estimation (uncertainty bands) ──────────────────────────────
+// Real-world GPS output varies substantially from model estimates due to player
+// fitness, work rate, rest periods, and environmental conditions.
+// Uncertainty factors derived from variability reported in women's football SSG literature.
+export type GPSRangeEstimate = {
+  [K in keyof GPSEstimate]: { low: number; mid: number; high: number };
+};
+
+const UNCERTAINTY: Record<keyof GPSEstimate, number> = {
+  distance: 0.15, // ±15% — most stable; mainly work-rate dependent
+  hsr:      0.30, // ±30% — depends on acceleration opportunities in the space
+  sprint:   0.40, // ±40% — highest uncertainty; threshold-sensitive & context-dependent
+  accels:   0.25, // ±25%
+  decels:   0.25, // ±25%
+};
+
+export function estimateGPSRange(rpa: number, durationMins: number): GPSRangeEstimate {
+  const midValues = estimateGPS(rpa, durationMins);
+  return (Object.keys(midValues) as (keyof GPSEstimate)[]).reduce((acc, k) => {
+    const f = UNCERTAINTY[k];
+    const m = midValues[k];
+    acc[k] = {
+      low:  Math.round(m * (1 - f)),
+      mid:  m,
+      high: Math.round(m * (1 + f)),
+    };
+    return acc;
+  }, {} as GPSRangeEstimate);
+}
+
 // ── Metric display config ─────────────────────────────────────────────────
 export const METRICS: Array<{
   key: keyof GPSEstimate;

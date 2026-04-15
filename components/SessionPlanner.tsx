@@ -53,7 +53,7 @@ function ProgressBar({
   colorClass: string;
 }) {
   const pct = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
-  const over = target > 0 && actual > target;
+  const over = target > 0 && actual >= target;
   const barColor = over ? "bg-green-400" : colorClass;
 
   return (
@@ -61,7 +61,7 @@ function ProgressBar({
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-medium text-zinc-400">{label}</span>
         <span className={`text-xs font-mono ${over ? "text-green-400" : "text-zinc-300"}`}>
-          {actual.toLocaleString()}{unit} / {target.toLocaleString()}{unit}
+          ~{actual.toLocaleString()}{unit} / {target.toLocaleString()}{unit}
           {over && <span className="ml-1 text-green-500">✓</span>}
         </span>
       </div>
@@ -75,6 +75,113 @@ function ProgressBar({
   );
 }
 
+// ── Export helpers ────────────────────────────────────────────────────────
+function formatDate(): string {
+  return new Date().toLocaleDateString("en-GB", {
+    day: "numeric", month: "short", year: "numeric",
+  });
+}
+
+function targetLabel(
+  mode: "session" | "position",
+  sessionKey: string,
+  positionKey: string,
+  matchPct: number,
+  targets: GPSEstimate
+): string {
+  if (mode === "session") {
+    const st = SESSION_TYPES[sessionKey];
+    return `${st.label} · ${targets.distance.toLocaleString()}m dist · ${targets.hsr}m HSR · ${targets.accels} Acc / ${targets.decels} Dec`;
+  }
+  const pos = POSITION_DATA[positionKey];
+  return `${pos.label} @ ${matchPct}% · ${targets.distance.toLocaleString()}m dist · ${targets.hsr}m HSR`;
+}
+
+function buildClipboardText(
+  drills: Drill[],
+  targets: GPSEstimate,
+  totals: GPSEstimate,
+  mode: "session" | "position",
+  sessionKey: string,
+  positionKey: string,
+  matchPct: number
+): string {
+  const lines: string[] = [
+    `SESSION PLAN — ${formatDate()}`,
+    `Target: ${targetLabel(mode, sessionKey, positionKey, matchPct, targets)}`,
+    "",
+  ];
+
+  drills.forEach((d, i) => {
+    lines.push(
+      `${i + 1}. ${d.name} · ${d.durationMins} min · RPE ${d.rpe} · RPA ${d.rpa.toFixed(1)} m²/pl`,
+      `   ~${d.gps.distance.toLocaleString()}m dist · ~${d.gps.hsr}m HSR · ~${d.gps.sprint}m sprint · ~${d.gps.accels} acc · ~${d.gps.decels} dec`,
+      ""
+    );
+  });
+
+  const pct = (a: number, t: number) =>
+    t > 0 ? ` (${Math.round((a / t) * 100)}%)` : "";
+
+  lines.push(
+    `TOTALS`,
+    `  Distance: ~${totals.distance.toLocaleString()}m / ${targets.distance.toLocaleString()}m${pct(totals.distance, targets.distance)}`,
+    `  HSR:      ~${totals.hsr}m / ${targets.hsr}m${pct(totals.hsr, targets.hsr)}`,
+    `  Sprint:   ~${totals.sprint}m / ${targets.sprint}m${pct(totals.sprint, targets.sprint)}`,
+    `  Accels:   ~${totals.accels} / ${targets.accels}${pct(totals.accels, targets.accels)}`,
+    `  Decels:   ~${totals.decels} / ${targets.decels}${pct(totals.decels, targets.decels)}`,
+    "",
+    "GPS estimates are research-based approximations (±15–40% variability)"
+  );
+
+  return lines.join("\n");
+}
+
+function buildCSV(
+  drills: Drill[],
+  targets: GPSEstimate,
+  totals: GPSEstimate,
+  mode: "session" | "position",
+  sessionKey: string,
+  positionKey: string,
+  matchPct: number
+): string {
+  const label = mode === "session"
+    ? SESSION_TYPES[sessionKey].label
+    : `${POSITION_DATA[positionKey].label} @ ${matchPct}%`;
+
+  const rows: string[][] = [
+    ["Session Plan", formatDate(), "", "", "", "", "", "", "", ""],
+    ["Target", label, "", "", String(targets.distance), String(targets.hsr), String(targets.sprint), String(targets.accels), String(targets.decels), ""],
+    [],
+    ["#", "Name", "Format", "Duration (min)", "RPA (m\u00b2/pl)", "Distance (m)", "HSR (m)", "Sprint (m)", "Accels", "Decels", "RPE"],
+    ...drills.map((d, i) => [
+      String(i + 1),
+      d.name,
+      d.format,
+      String(d.durationMins),
+      d.rpa.toFixed(1),
+      String(d.gps.distance),
+      String(d.gps.hsr),
+      String(d.gps.sprint),
+      String(d.gps.accels),
+      String(d.gps.decels),
+      String(d.rpe),
+    ]),
+    [],
+    ["TOTALS", "", "", String(drills.reduce((s, d) => s + d.durationMins, 0)), "",
+      String(totals.distance), String(totals.hsr), String(totals.sprint),
+      String(totals.accels), String(totals.decels), ""],
+    [],
+    ["Note: GPS values are research-based approximations (±15-40% variability)"],
+  ];
+
+  return rows
+    .map((r) => r.map((c) => (c.includes(",") ? `"${c}"` : c)).join(","))
+    .join("\n");
+}
+
+// ── Component ─────────────────────────────────────────────────────────────
 export default function SessionPlanner({
   drills,
   onRemoveDrill,
@@ -85,8 +192,8 @@ export default function SessionPlanner({
   const [positionKey, setPositionKey] = useState("average");
   const [matchPct, setMatchPct] = useState(60);
   const [expandedDrill, setExpandedDrill] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
-  // Compute current targets
   const targets: GPSEstimate =
     mode === "session"
       ? SESSION_TYPES[sessionKey]
@@ -104,6 +211,25 @@ export default function SessionPlanner({
     drills.length > 0
       ? Math.round((drills.reduce((s, d) => s + d.rpe, 0) / drills.length) * 10) / 10
       : 0;
+
+  function handleCopy() {
+    const text = buildClipboardText(drills, targets, totals, mode, sessionKey, positionKey, matchPct);
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  function handleCSV() {
+    const csv = buildCSV(drills, targets, totals, mode, sessionKey, positionKey, matchPct);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `session-plan-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div className="space-y-5">
@@ -167,22 +293,18 @@ export default function SessionPlanner({
           </div>
           <div className="space-y-1">
             <div className="flex items-center justify-between">
-              <label className="text-xs text-zinc-400">Match load target: <span className="font-bold text-white">{matchPct}%</span></label>
+              <label className="text-xs text-zinc-400">
+                Match load target: <span className="font-bold text-white">{matchPct}%</span>
+              </label>
               <span className="text-xs text-zinc-600">{targets.distance.toLocaleString()}m distance</span>
             </div>
             <input
-              type="range"
-              min={30}
-              max={90}
-              step={5}
-              value={matchPct}
+              type="range" min={30} max={90} step={5} value={matchPct}
               onChange={(e) => setMatchPct(Number(e.target.value))}
               className="w-full accent-green-500"
             />
             <div className="flex justify-between text-xs text-zinc-700">
-              <span>30%</span>
-              <span>60%</span>
-              <span>90%</span>
+              <span>30%</span><span>60%</span><span>90%</span>
             </div>
           </div>
         </div>
@@ -207,9 +329,13 @@ export default function SessionPlanner({
             colorClass={m.color}
           />
         ))}
-        {drills.length === 0 && (
+        {drills.length === 0 ? (
           <p className="text-xs text-zinc-600 text-center pt-2">
-            Add drills below to see your session GPS totals
+            Add drills from the canvas above to see your session GPS totals
+          </p>
+        ) : (
+          <p className="text-xs text-zinc-700 pt-1">
+            GPS estimates are research-based approximations (±15–40%). Edit any value in the drill to override.
           </p>
         )}
       </div>
@@ -252,13 +378,13 @@ export default function SessionPlanner({
                   </div>
                 </div>
 
-                {/* GPS summary row */}
+                {/* GPS summary row — ~ prefix on all estimates */}
                 <div className="px-4 pb-3 grid grid-cols-5 gap-2">
                   {METRICS.map((m) => (
                     <div key={m.key} className="text-center">
                       <p className="text-xs text-zinc-600">{m.label}</p>
                       <p className="text-xs font-mono font-semibold text-zinc-300">
-                        {drill.gps[m.key].toLocaleString()}{m.unit}
+                        ~{drill.gps[m.key].toLocaleString()}{m.unit}
                       </p>
                     </div>
                   ))}
@@ -285,11 +411,7 @@ export default function SessionPlanner({
                           Duration: <span className="text-white font-semibold">{drill.durationMins} min</span>
                         </label>
                         <input
-                          type="range"
-                          min={5}
-                          max={45}
-                          step={5}
-                          value={drill.durationMins}
+                          type="range" min={5} max={45} step={5} value={drill.durationMins}
                           onChange={(e) => onUpdateDrill(drill.id, { durationMins: Number(e.target.value) })}
                           className="w-full accent-green-500"
                         />
@@ -301,11 +423,7 @@ export default function SessionPlanner({
                           RPE: <span className="text-white font-semibold">{drill.rpe}</span>
                         </label>
                         <input
-                          type="range"
-                          min={1}
-                          max={10}
-                          step={1}
-                          value={drill.rpe}
+                          type="range" min={1} max={10} step={1} value={drill.rpe}
                           onChange={(e) => onUpdateDrill(drill.id, { rpe: Number(e.target.value) })}
                           className="w-full accent-green-500"
                         />
@@ -318,7 +436,7 @@ export default function SessionPlanner({
                       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                         {METRICS.map((m) => (
                           <div key={m.key}>
-                            <label className="text-xs text-zinc-500 block mb-1">{m.label} {m.unit}</label>
+                            <label className="text-xs text-zinc-500 block mb-1">{m.label}{m.unit ? ` (${m.unit})` : ""}</label>
                             <input
                               type="number"
                               min={0}
@@ -339,6 +457,29 @@ export default function SessionPlanner({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ── Export bar ── */}
+      {drills.length > 0 && (
+        <div className="flex items-center gap-3 pt-1 border-t border-zinc-800">
+          <span className="text-xs text-zinc-600 flex-1">Export session plan</span>
+          <button
+            onClick={handleCopy}
+            className={`text-xs px-3 py-1.5 rounded border transition-colors ${
+              copied
+                ? "border-green-700 bg-green-950 text-green-400"
+                : "border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500"
+            }`}
+          >
+            {copied ? "Copied!" : "Copy text"}
+          </button>
+          <button
+            onClick={handleCSV}
+            className="text-xs px-3 py-1.5 rounded border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
+          >
+            Download CSV
+          </button>
         </div>
       )}
     </div>
