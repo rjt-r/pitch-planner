@@ -48,6 +48,7 @@ interface PitchCanvasProps {
   seed: SeedConfig | null;
   seedVersion: number;
   snapEnabled: boolean;
+  onAddDrill?: (stats: { area: number; rpa: number; refLabel: string }) => void;
 }
 
 // ── Pitch markings (drawn inside the polygon, clipped to its shape) ────────
@@ -145,7 +146,7 @@ function PitchMarkings({
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
-export default function PitchCanvas({ seed, seedVersion, snapEnabled }: PitchCanvasProps) {
+export default function PitchCanvas({ seed, seedVersion, snapEnabled, onAddDrill }: PitchCanvasProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [vertices, setVertices] = useState<Point[]>([]);
   const [isClosed, setIsClosed] = useState(false);
@@ -640,18 +641,28 @@ export default function PitchCanvas({ seed, seedVersion, snapEnabled }: PitchCan
 
       {/* ── Stats bar ── */}
       {showStats && (
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-          <Stat label="Area"   value={`${area.toFixed(0)} m²`} />
-          <Stat label="Length" value={`${bboxL}m`} />
-          <Stat label="Width"  value={`${bboxW}m`} />
-          <Stat label="RPA"    value={`${rpa.toFixed(1)} m²/pl`} cls={devClass} />
-          {seed && (
-            <Stat
-              label={`vs ${seed.refLabel}`}
-              value={dev === 0 ? "Exact" : `${dev > 0 ? "+" : ""}${(dev * 100).toFixed(0)}%`}
-              cls={devClass}
-              sub={devLabel}
-            />
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            <Stat label="Area"   value={`${area.toFixed(0)} m²`} />
+            <Stat label="Length" value={`${bboxL}m`} />
+            <Stat label="Width"  value={`${bboxW}m`} />
+            <Stat label="RPA"    value={`${rpa.toFixed(1)} m²/pl`} cls={devClass} />
+            {seed && (
+              <Stat
+                label={`vs ${seed.refLabel}`}
+                value={dev === 0 ? "Exact" : `${dev > 0 ? "+" : ""}${(dev * 100).toFixed(0)}%`}
+                cls={devClass}
+                sub={devLabel}
+              />
+            )}
+          </div>
+          {isClosed && seed && onAddDrill && (
+            <button
+              onClick={() => onAddDrill({ area, rpa, refLabel: seed.refLabel })}
+              className="w-full sm:w-auto flex items-center justify-center gap-2 bg-green-600 hover:bg-green-500 text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition-colors"
+            >
+              <span>＋</span> Add to session
+            </button>
           )}
         </div>
       )}
