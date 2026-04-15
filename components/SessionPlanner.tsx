@@ -47,15 +47,30 @@ function ProgressBar({
   actual,
   target,
   colorClass,
+  zeroNote,
 }: {
   label: string;
   unit: string;
   actual: number;
   target: number;
   colorClass: string;
+  zeroNote?: string; // shown when target === 0 instead of a bar
 }) {
-  const pct = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
-  const over = target > 0 && actual >= target;
+  // When target is 0 (e.g. Sprint in SSG sessions), show an explanatory note
+  if (target === 0) {
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs font-medium text-zinc-500">{label}</span>
+          <span className="text-xs text-zinc-600 italic">{zeroNote ?? "not targeted"}</span>
+        </div>
+        <div className="h-2 bg-zinc-800/50 rounded-full" />
+      </div>
+    );
+  }
+
+  const pct = Math.min(100, (actual / target) * 100);
+  const over = actual >= target;
   const barColor = over ? "bg-green-400" : colorClass;
 
   return (
@@ -295,42 +310,42 @@ export default function SessionPlanner({
               const ov = customOverrides[key] ?? {};
               const isCustomised = Object.keys(ov).length > 0;
               return (
-                <button
-                  key={key}
-                  onClick={() => { setSessionKey(key); setEditingTarget(false); }}
-                  className={`text-left px-3 py-2.5 rounded-lg border text-xs transition-colors ${
-                    isSelected
-                      ? "border-green-600 bg-green-950/50 text-green-300"
-                      : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-white"
-                  }`}
-                >
-                  <span className="font-bold block text-sm leading-tight">{st.label}</span>
-                  <span className="text-zinc-500 mt-0.5 block">{st.subtitle}</span>
-                  <span className="text-zinc-600 block mt-1">
-                    {(ov.distance ?? st.distance).toLocaleString()}m · RPE {st.rpe}
-                    {isCustomised && <span className="ml-1 text-amber-600">✎</span>}
-                  </span>
-                </button>
+                <div key={key} className="relative">
+                  <button
+                    onClick={() => { setSessionKey(key); setEditingTarget(false); }}
+                    className={`w-full text-left px-3 py-2.5 rounded-lg border text-xs transition-colors ${
+                      isSelected
+                        ? "border-green-600 bg-green-950/50 text-green-300"
+                        : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-white"
+                    }`}
+                  >
+                    <span className="font-bold block text-sm leading-tight pr-6">{st.label}</span>
+                    <span className="text-zinc-500 mt-0.5 block">{st.subtitle}</span>
+                    <span className="text-zinc-600 block mt-1">
+                      {(ov.distance ?? st.distance).toLocaleString()}m · RPE {st.rpe}
+                    </span>
+                  </button>
+                  {/* ✎ customise icon — always visible on card, prominent on selected */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSessionKey(key);
+                      setEditingTarget((v) => sessionKey === key ? !v : true);
+                    }}
+                    title="Customise targets for your squad"
+                    className={`absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded transition-colors text-xs ${
+                      isCustomised
+                        ? "text-amber-400 bg-amber-500/15 border border-amber-500/30"
+                        : isSelected
+                        ? "text-zinc-400 hover:text-white hover:bg-zinc-700"
+                        : "text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800"
+                    }`}
+                  >
+                    ✎
+                  </button>
+                </div>
               );
             })}
-          </div>
-
-          {/* Editable targets for selected session type */}
-          <div className="flex items-center gap-3 pt-1">
-            <button
-              onClick={() => setEditingTarget((v) => !v)}
-              className="text-xs text-zinc-600 hover:text-zinc-300 underline underline-offset-2 transition-colors"
-            >
-              {editingTarget ? "Done editing" : `Customise ${SESSION_TYPES[sessionKey].label} targets for your squad`}
-            </button>
-            {hasOverride && !editingTarget && (
-              <button
-                onClick={resetOverrides}
-                className="text-xs text-zinc-700 hover:text-red-400 transition-colors"
-              >
-                Reset to defaults
-              </button>
-            )}
           </div>
 
           {editingTarget && (
@@ -436,6 +451,11 @@ export default function SessionPlanner({
             actual={totals[m.key]}
             target={targets[m.key]}
             colorClass={m.color}
+            zeroNote={
+              m.key === "sprint" && targets[m.key] === 0
+                ? "not targeted in tight spaces — use Extensive or Match Load %"
+                : undefined
+            }
           />
         ))}
         {drills.length === 0 ? (
@@ -557,28 +577,38 @@ export default function SessionPlanner({
         </div>
       )}
 
-      {/* ── Export bar ── */}
-      {drills.length > 0 && (
-        <div className="flex items-center gap-3 pt-1 border-t border-zinc-800">
-          <span className="text-xs text-zinc-600 flex-1">Export session plan</span>
-          <button
-            onClick={handleCopy}
-            className={`text-xs px-3 py-1.5 rounded border transition-colors ${
-              copied
-                ? "border-green-700 bg-green-950 text-green-400"
-                : "border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500"
-            }`}
-          >
-            {copied ? "Copied!" : "Copy text"}
-          </button>
-          <button
-            onClick={handleCSV}
-            className="text-xs px-3 py-1.5 rounded border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
-          >
-            Download CSV
-          </button>
-        </div>
-      )}
+      {/* ── Export bar — always visible; buttons disabled until drills are added ── */}
+      <div className="flex items-center gap-3 pt-1 border-t border-zinc-800">
+        <span className="text-xs text-zinc-600 flex-1">
+          {drills.length === 0
+            ? "Export (add drills to unlock)"
+            : "Export session plan"}
+        </span>
+        <button
+          disabled={drills.length === 0}
+          onClick={handleCopy}
+          className={`text-xs px-3 py-1.5 rounded border transition-colors ${
+            drills.length === 0
+              ? "border-zinc-800 text-zinc-700 cursor-not-allowed"
+              : copied
+              ? "border-green-700 bg-green-950 text-green-400"
+              : "border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500"
+          }`}
+        >
+          {copied ? "Copied!" : "Copy text"}
+        </button>
+        <button
+          disabled={drills.length === 0}
+          onClick={handleCSV}
+          className={`text-xs px-3 py-1.5 rounded border transition-colors ${
+            drills.length === 0
+              ? "border-zinc-800 text-zinc-700 cursor-not-allowed"
+              : "border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500"
+          }`}
+        >
+          Download CSV
+        </button>
+      </div>
     </div>
   );
 }

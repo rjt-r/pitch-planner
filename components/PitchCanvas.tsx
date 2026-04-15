@@ -420,8 +420,18 @@ export default function PitchCanvas({ seed, seedVersion, snapEnabled, onAddDrill
         </button>
       </div>
 
-      {/* SVG Canvas */}
-      <div className="w-full touch-none overflow-x-auto rounded-xl overflow-hidden shadow-2xl">
+      {/* SVG Canvas — wrapped in relative so the overlay button can sit on top */}
+      <div className="relative w-full touch-none overflow-x-auto rounded-xl overflow-hidden shadow-2xl">
+        {/* Overlay "Add to session" — appears on the canvas once shape is ready */}
+        {isClosed && seed && onAddDrill && (
+          <button
+            onClick={() => onAddDrill({ area, rpa, refLabel: seed.refLabel })}
+            className="absolute top-3 right-3 z-10 flex items-center gap-2 bg-green-600 hover:bg-green-500 active:bg-green-700 text-white text-xs font-bold px-3.5 py-2 rounded-lg shadow-lg shadow-black/40 transition-colors ring-2 ring-green-500/30"
+          >
+            <span className="text-sm leading-none">+</span>
+            Add to session
+          </button>
+        )}
         <svg
           ref={svgRef}
           viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
