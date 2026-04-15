@@ -7,6 +7,7 @@ import {
   METRICS,
   type GPSEstimate,
 } from "@/lib/gps-targets";
+import { saveToLibrary } from "@/lib/drill-library";
 
 export type Drill = {
   id: string;
@@ -203,6 +204,7 @@ export default function SessionPlanner({
   const [matchPct, setMatchPct] = useState(60);
   const [expandedDrill, setExpandedDrill] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [savedId, setSavedId] = useState<string | null>(null);
 
   // ── Editable session-type targets ────────────────────────────────────────
   const [customOverrides, setCustomOverrides] = useState<
@@ -603,6 +605,20 @@ export default function SessionPlanner({
                       className="text-xs border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 px-2.5 py-1 rounded transition-colors"
                     >
                       {isExpanded ? "Close" : "Edit"}
+                    </button>
+                    <button
+                      onClick={() => {
+                        saveToLibrary({ ...drill, savedAt: new Date().toISOString() });
+                        setSavedId(drill.id);
+                        setTimeout(() => setSavedId(null), 2000);
+                      }}
+                      className={`text-xs border px-2.5 py-1 rounded transition-colors ${
+                        savedId === drill.id
+                          ? "border-green-700 bg-green-950 text-green-400"
+                          : "border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500"
+                      }`}
+                    >
+                      {savedId === drill.id ? "Saved ✓" : "Save to library"}
                     </button>
                     <button
                       onClick={() => onRemoveDrill(drill.id)}
