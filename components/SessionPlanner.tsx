@@ -204,13 +204,12 @@ export default function SessionPlanner({
   const [expandedDrill, setExpandedDrill] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  // ── Editable targets: per-sessionKey overrides on top of SESSION_TYPES defaults ──
+  // ── Editable session-type targets ────────────────────────────────────────
   const [customOverrides, setCustomOverrides] = useState<
     Record<string, Partial<GPSEstimate>>
   >({});
   const [editingTarget, setEditingTarget] = useState(false);
 
-  // Effective targets for current selection
   const baseSessionTarget = SESSION_TYPES[sessionKey];
   const overrides = customOverrides[sessionKey] ?? {};
   const effectiveSessionTarget: GPSEstimate = {
@@ -221,15 +220,31 @@ export default function SessionPlanner({
     decels:   overrides.decels   ?? baseSessionTarget.decels,
   };
 
+  // ── Editable match-day demands (position tab) ─────────────────────────
+  const [customPositionOverrides, setCustomPositionOverrides] = useState<
+    Record<string, Partial<GPSEstimate>>
+  >({});
+  const [editingPosition, setEditingPosition] = useState(false);
+
+  const basePosition = POSITION_DATA[positionKey];
+  const posOverrides = customPositionOverrides[positionKey] ?? {};
+  const effectivePosition: GPSEstimate = {
+    distance: posOverrides.distance ?? basePosition.distance,
+    hsr:      posOverrides.hsr      ?? basePosition.hsr,
+    sprint:   posOverrides.sprint   ?? basePosition.sprint,
+    accels:   posOverrides.accels   ?? basePosition.accels,
+    decels:   posOverrides.decels   ?? basePosition.decels,
+  };
+
   const targets: GPSEstimate =
     mode === "session"
       ? effectiveSessionTarget
       : {
-          distance: Math.round(POSITION_DATA[positionKey].distance * (matchPct / 100)),
-          hsr:      Math.round(POSITION_DATA[positionKey].hsr      * (matchPct / 100)),
-          sprint:   Math.round(POSITION_DATA[positionKey].sprint   * (matchPct / 100)),
-          accels:   Math.round(POSITION_DATA[positionKey].accels   * (matchPct / 100)),
-          decels:   Math.round(POSITION_DATA[positionKey].decels   * (matchPct / 100)),
+          distance: Math.round(effectivePosition.distance * (matchPct / 100)),
+          hsr:      Math.round(effectivePosition.hsr      * (matchPct / 100)),
+          sprint:   Math.round(effectivePosition.sprint   * (matchPct / 100)),
+          accels:   Math.round(effectivePosition.accels   * (matchPct / 100)),
+          decels:   Math.round(effectivePosition.decels   * (matchPct / 100)),
         };
 
   const totals = sumGPS(drills);
@@ -261,6 +276,22 @@ export default function SessionPlanner({
   }
 
   const hasOverride = Object.keys(customOverrides[sessionKey] ?? {}).length > 0;
+  const hasPosOverride = Object.keys(customPositionOverrides[positionKey] ?? {}).length > 0;
+
+  function setPosOverride(k: keyof GPSEstimate, val: number) {
+    setCustomPositionOverrides((prev) => ({
+      ...prev,
+      [positionKey]: { ...(prev[positionKey] ?? {}), [k]: val },
+    }));
+  }
+
+  function resetPosOverrides() {
+    setCustomPositionOverrides((prev) => {
+      const next = { ...prev };
+      delete next[positionKey];
+      return next;
+    });
+  }
 
   function handleCopy() {
     const text = buildClipboardText(drills, targets, totals, mode, sessionKey, positionKey, matchPct);
@@ -400,21 +431,99 @@ export default function SessionPlanner({
         <div className="space-y-3">
           <p className="text-xs text-zinc-500">Choose position and % of match load to target:</p>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {Object.entries(POSITION_DATA).map(([key, pos]) => (
-              <button
-                key={key}
-                onClick={() => setPositionKey(key)}
-                className={`text-left px-3 py-2.5 rounded-lg border text-xs transition-colors ${
-                  positionKey === key
-                    ? "border-green-600 bg-green-950/50 text-green-300"
-                    : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-white"
-                }`}
-              >
-                <span className="font-semibold block">{pos.label}</span>
-                <span className="text-zinc-600 block mt-0.5">{pos.distance.toLocaleString()}m · {pos.hsr} HSR</span>
-              </button>
-            ))}
+            {Object.entries(POSITION_DATA).map(([key, pos]) => {
+              const isSelected = positionKey === key;
+              const pov = customPositionOverrides[key] ?? {};
+              const isCustomised = Object.keys(pov).length > 0;
+              const displayDist = pov.distance ?? pos.distance;
+              const displayHsr  = pov.hsr      ?? pos.hsr;
+              return (
+                <div key={key} className="relative">
+                  <button
+                    onClick={() => { setPositionKey(key); setEditingPosition(false); }}
+                    className={`w-full text-left px-3 py-2.5 rounded-lg border text-xs transition-colors ${
+                      isSelected
+                        ? "border-green-600 bg-green-950/50 text-green-300"
+                        : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-white"
+                    }`}
+                  >
+                    <span className="font-semibold block pr-6">{pos.label}</span>
+                    <span className="text-zinc-600 block mt-0.5">
+                      {displayDist.toLocaleString()}m · {displayHsr} HSR
+                    </span>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPositionKey(key);
+                      setEditingPosition((v) => positionKey === key ? !v : true);
+                    }}
+                    title="Edit match demands for your squad"
+                    className={`absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded transition-colors text-xs ${
+                      isCustomised
+                        ? "text-amber-400 bg-amber-500/15 border border-amber-500/30"
+                        : isSelected
+                        ? "text-zinc-400 hover:text-white hover:bg-zinc-700"
+                        : "text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800"
+                    }`}
+                  >
+                    ✎
+                  </button>
+                </div>
+              );
+            })}
           </div>
+
+          {/* Inline editor for position match demands */}
+          {editingPosition && (
+            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-zinc-400 font-medium">
+                  {POSITION_DATA[positionKey].label} match demands{" "}
+                  <span className="text-zinc-600 font-normal">— edit for your squad's actual data</span>
+                </p>
+                {hasPosOverride && (
+                  <button
+                    onClick={resetPosOverrides}
+                    className="text-xs text-zinc-600 hover:text-red-400 transition-colors"
+                  >
+                    Reset to defaults
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                {METRICS.map((m) => {
+                  const defaultVal = basePosition[m.key];
+                  const currentVal = effectivePosition[m.key];
+                  const isEdited = currentVal !== defaultVal;
+                  return (
+                    <div key={m.key}>
+                      <label className="text-xs text-zinc-500 block mb-1">
+                        {m.label}{m.unit ? ` (${m.unit})` : ""}
+                        {isEdited && <span className="ml-1 text-amber-600">✎</span>}
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={currentVal}
+                        onChange={(e) => setPosOverride(m.key, Number(e.target.value))}
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-green-600"
+                      />
+                      {isEdited && (
+                        <p className="text-xs text-zinc-700 mt-0.5 font-mono">
+                          default: {defaultVal.toLocaleString()}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-zinc-700">
+                Targets update as {matchPct}% of these values. Use your squad&apos;s GPS system averages for accuracy.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-1">
             <div className="flex items-center justify-between">
               <label className="text-xs text-zinc-400">
