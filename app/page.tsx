@@ -1,17 +1,369 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useRef } from "react";
 import FormatSelector from "@/components/FormatSelector";
 import ReferencePanel from "@/components/ReferencePanel";
 import PitchCanvas from "@/components/PitchCanvas";
+import SessionPlanner, { type Drill } from "@/components/SessionPlanner";
+import DrillLibrary from "@/components/DrillLibrary";
+import { estimateGPSRange, type GPSRangeEstimate, type GPSEstimate, METRICS } from "@/lib/gps-targets";
 import type { SeedConfig } from "@/components/ReferencePanel";
+import type { LibraryDrill } from "@/lib/drill-library";
 
+function StepHeader({ n, title, subtitle }: { n: number; title: string; subtitle?: string }) {
+  return (
+    <div className="flex items-start gap-3 mb-5">
+      <span className="w-7 h-7 rounded-full bg-green-600 text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+        {n}
+      </span>
+      <div>
+        <h2 className="text-sm font-semibold text-white tracking-wide">{title}</h2>
+        {subtitle && <p className="text-xs text-zinc-500 mt-0.5">{subtitle}</p>}
+      </div>
+    </div>
+  );
+}
+
+// ── Drill detail modal ────────────────────────────────────────────────────
+type PendingDrill = {
+  area: number;
+  rpa: number;
+  refLabel: string;
+};
+
+const GPS_LABELS: Record<string, { label: string; unit: string }> = {
+  distance: { label: "Dist",   unit: "m" },
+  hsr:      { label: "HSR",    unit: "m" },
+  sprint:   { label: "Sprint", unit: "m" },
+  accels:   { label: "Accels", unit: "" },
+  decels:   { label: "Decels", unit: "" },
+};
+
+function DrillModal({
+  pending,
+  format,
+  seed,
+  onConfirm,
+  onCancel,
+}: {
+  pending: PendingDrill;
+  format: string;
+  seed: SeedConfig;
+  onConfirm: (drill: Drill) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(`${format} drill`);
+  const [duration, setDuration] = useState(15);
+  const [rpe, setRpe] = useState(7);
+  // gpsRange tracks low/mid/high; mid is the editable value
+  const [gpsRange, setGpsRange] = useState<GPSRangeEstimate>(
+    () => estimateGPSRange(pending.rpa, 15)
+  );
+
+  // Re-estimate ranges when duration changes; preserve any manual mid overrides
+  function handleDuration(d: number) {
+    setDuration(d);
+    setGpsRange(estimateGPSRange(pending.rpa, d));
+  }
+
+  // Allow manual override of the mid value while keeping range context
+  function handleGpsChange(k: keyof GPSRangeEstimate, val: number) {
+    setGpsRange((prev) => ({ ...prev, [k]: { ...prev[k], mid: val } }));
+  }
+
+  function handleConfirm() {
+    // Drill stores the mid (editable) values as the working GPS estimate
+    const gps = (Object.keys(gpsRange) as (keyof GPSRangeEstimate)[]).reduce(
+      (acc, k) => { acc[k] = gpsRange[k].mid; return acc; },
+      {} as Record<string, number>
+    ) as import("@/lib/gps-targets").GPSEstimate;
+
+    const drill: Drill = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name,
+      format,
+      rpa: pending.rpa,
+      area: pending.area,
+      refLabel: pending.refLabel,
+      durationMins: duration,
+      rpe,
+      gps,
+    };
+    onConfirm(drill);
+  }
+
+  // Suppress unused variable warning — seed is required by parent typing
+  void seed;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+      <div className="w-full max-w-lg bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl overflow-hidden">
+        {/* Header */}
+        <div className="px-5 py-4 border-b border-zinc-800">
+          <h2 className="text-base font-bold text-white">Add drill to session</h2>
+          <p className="text-xs text-zinc-500 mt-0.5">
+            RPA {pending.rpa.toFixed(1)} m²/pl · {pending.area.toFixed(0)} m² · Ref: {pending.refLabel}
+          </p>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {/* Name */}
+          <div>
+            <label className="text-xs text-zinc-400 block mb-1">Drill name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-green-600"
+              autoFocus
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            {/* Duration */}
+            <div>
+              <label className="text-xs text-zinc-400 block mb-1">
+                Duration: <span className="text-white font-semibold">{duration} min</span>
+              </label>
+              <input
+                type="range" min={5} max={45} step={5} value={duration}
+                onChange={(e) => handleDuration(Number(e.target.value))}
+                className="w-full accent-green-500"
+              />
+              <div className="flex justify-between text-xs text-zinc-700 mt-0.5">
+                <span>5</span><span>25</span><span>45</span>
+              </div>
+            </div>
+
+            {/* RPE */}
+            <div>
+              <label className="text-xs text-zinc-400 block mb-1">
+                RPE: <span className="text-white font-semibold">{rpe}</span>
+              </label>
+              <input
+                type="range" min={1} max={10} step={1} value={rpe}
+                onChange={(e) => setRpe(Number(e.target.value))}
+                className="w-full accent-green-500"
+              />
+              <div className="flex justify-between text-xs text-zinc-700 mt-0.5">
+                <span>1</span><span>5</span><span>10</span>
+              </div>
+            </div>
+          </div>
+
+          {/* GPS estimates with uncertainty ranges */}
+          <div>
+            <div className="flex items-baseline justify-between mb-2">
+              <p className="text-xs text-zinc-400">
+                Estimated GPS output{" "}
+                <span className="text-zinc-600">(editable)</span>
+              </p>
+              <p className="text-xs text-zinc-600">varies ±15–40% with player work rate</p>
+            </div>
+            <div className="grid grid-cols-5 gap-2">
+              {(["distance","hsr","sprint","accels","decels"] as const).map((k) => {
+                const { label, unit } = GPS_LABELS[k];
+                const { low, mid, high } = gpsRange[k];
+                return (
+                  <div key={k}>
+                    <label className="text-xs text-zinc-500 block mb-1 leading-tight">
+                      {label}{unit ? ` (${unit})` : ""}
+                    </label>
+                    <input
+                      type="number" min={0} value={mid}
+                      onChange={(e) => handleGpsChange(k, Number(e.target.value))}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-green-600"
+                    />
+                    <p className="text-xs text-zinc-700 mt-1 leading-tight font-mono">
+                      {low.toLocaleString()}–{high.toLocaleString()}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-4 border-t border-zinc-800 flex gap-3 justify-end">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-sm border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 rounded-lg transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirm}
+            className="px-5 py-2 text-sm bg-green-600 hover:bg-green-500 text-white font-semibold rounded-lg transition-colors"
+          >
+            Add drill
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Library load modal ────────────────────────────────────────────────────
+// Simpler than DrillModal — GPS is already calculated, just let the coach
+// adjust name / duration / RPE / GPS before dropping it into the session.
+function LibraryLoadModal({
+  drill,
+  onConfirm,
+  onCancel,
+}: {
+  drill: LibraryDrill;
+  onConfirm: (d: Drill) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(drill.name);
+  const [duration, setDuration] = useState(drill.durationMins);
+  const [rpe, setRpe] = useState(drill.rpe);
+  const [gps, setGps] = useState<GPSEstimate>({ ...drill.gps });
+
+  function handleGpsChange(k: keyof GPSEstimate, val: number) {
+    setGps((prev) => ({ ...prev, [k]: val }));
+  }
+
+  function handleConfirm() {
+    const newDrill: Drill = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name,
+      format: drill.format,
+      rpa: drill.rpa,
+      area: drill.area,
+      refLabel: drill.refLabel,
+      durationMins: duration,
+      rpe,
+      gps,
+    };
+    onConfirm(newDrill);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+      <div className="w-full max-w-lg bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl overflow-hidden">
+        {/* Header */}
+        <div className="px-5 py-4 border-b border-zinc-800">
+          <h2 className="text-base font-bold text-white">Load from library</h2>
+          <p className="text-xs text-zinc-500 mt-0.5">
+            {drill.format} · RPA {drill.rpa.toFixed(1)} m²/pl · Ref: {drill.refLabel}
+          </p>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {/* Name */}
+          <div>
+            <label className="text-xs text-zinc-400 block mb-1">Drill name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-green-600"
+              autoFocus
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            {/* Duration */}
+            <div>
+              <label className="text-xs text-zinc-400 block mb-1">
+                Duration: <span className="text-white font-semibold">{duration} min</span>
+              </label>
+              <input
+                type="range" min={5} max={45} step={5} value={duration}
+                onChange={(e) => setDuration(Number(e.target.value))}
+                className="w-full accent-green-500"
+              />
+              <div className="flex justify-between text-xs text-zinc-700 mt-0.5">
+                <span>5</span><span>25</span><span>45</span>
+              </div>
+            </div>
+
+            {/* RPE */}
+            <div>
+              <label className="text-xs text-zinc-400 block mb-1">
+                RPE: <span className="text-white font-semibold">{rpe}</span>
+              </label>
+              <input
+                type="range" min={1} max={10} step={1} value={rpe}
+                onChange={(e) => setRpe(Number(e.target.value))}
+                className="w-full accent-green-500"
+              />
+              <div className="flex justify-between text-xs text-zinc-700 mt-0.5">
+                <span>1</span><span>5</span><span>10</span>
+              </div>
+            </div>
+          </div>
+
+          {/* GPS fields */}
+          <div>
+            <p className="text-xs text-zinc-400 mb-2">
+              GPS estimates <span className="text-zinc-600">(editable)</span>
+            </p>
+            <div className="grid grid-cols-5 gap-2">
+              {(["distance","hsr","sprint","accels","decels"] as const).map((k) => {
+                const { label, unit } = GPS_LABELS[k];
+                return (
+                  <div key={k}>
+                    <label className="text-xs text-zinc-500 block mb-1 leading-tight">
+                      {label}{unit ? ` (${unit})` : ""}
+                    </label>
+                    <input
+                      type="number" min={0} value={gps[k]}
+                      onChange={(e) => handleGpsChange(k, Number(e.target.value))}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-green-600"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-4 border-t border-zinc-800 flex gap-3 justify-end">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-sm border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 rounded-lg transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirm}
+            className="px-5 py-2 text-sm bg-green-600 hover:bg-green-500 text-white font-semibold rounded-lg transition-colors"
+          >
+            Add to session
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────
 export default function PitchPlannerPage() {
   const [format, setFormat] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [seed, setSeed] = useState<SeedConfig | null>(null);
   const [seedVersion, setSeedVersion] = useState(0);
   const [snapEnabled, setSnapEnabled] = useState(true);
+
+  // Session planner state
+  const [drills, setDrills] = useState<Drill[]>([]);
+  const [pendingDrill, setPendingDrill] = useState<PendingDrill | null>(null);
+  // Library load state
+  const [libraryDrill, setLibraryDrill] = useState<LibraryDrill | null>(null);
+
+  // Sticky bar state — updated by SessionPlanner via callback
+  const [stickyTotals, setStickyTotals] = useState<GPSEstimate | null>(null);
+  const [stickyTargets, setStickyTargets] = useState<GPSEstimate | null>(null);
+  const sessionRef = useRef<HTMLDivElement>(null);
+
+  const handleTotalsChange = useCallback((totals: GPSEstimate, targets: GPSEstimate) => {
+    setStickyTotals(totals);
+    setStickyTargets(targets);
+  }, []);
 
   function handleFormat(f: string) {
     setFormat(f);
@@ -22,98 +374,232 @@ export default function PitchPlannerPage() {
   function handleRefSelect(cfg: SeedConfig, key: string) {
     setSeed(cfg);
     setSelectedKey(key);
-    setSeedVersion((v) => v + 1); // re-seed canvas
+    setSeedVersion((v) => v + 1);
+  }
+
+  const handleAddDrill = useCallback(
+    (stats: { area: number; rpa: number; refLabel: string }) => {
+      setPendingDrill(stats);
+    },
+    []
+  );
+
+  function handleDrillConfirm(drill: Drill) {
+    setDrills((prev) => [...prev, drill]);
+    setPendingDrill(null);
+  }
+
+  function handleRemoveDrill(id: string) {
+    setDrills((prev) => prev.filter((d) => d.id !== id));
+  }
+
+  function handleUpdateDrill(id: string, updates: Partial<Drill>) {
+    setDrills((prev) =>
+      prev.map((d) => (d.id === id ? { ...d, ...updates } : d))
+    );
   }
 
   return (
-    <main className="min-h-screen bg-black text-white">
-      <div className="max-w-5xl mx-auto px-4 py-10">
+    <main className="min-h-screen bg-zinc-950 text-white">
 
-        {/* Header */}
-        <div className="mb-8">
-          <p className="text-xs font-mono tracking-widest text-green-600 uppercase mb-2">
-            Pitch Planner
-          </p>
-          <h1 className="text-3xl font-bold tracking-tight">
+      <div className="max-w-5xl mx-auto px-4 py-8 space-y-5">
+
+        {/* ── Hero ── */}
+        <div className="bg-gradient-to-br from-green-950/60 to-zinc-900/60 border border-green-900/40 rounded-xl p-6">
+          <h1 className="text-2xl font-bold tracking-tight mb-1">
             Design your training area
           </h1>
-          <p className="text-zinc-400 mt-2 max-w-xl">
-            Pick a game format and reference size, then draw any pitch shape — rectangle, circle,
-            star, L-shape. Area and RPA update live as you reshape.
+          <p className="text-zinc-400 text-sm leading-relaxed max-w-2xl">
+            Pick a game format, choose a reference size based on research, then draw any pitch
+            shape. Area and RPA update live as you reshape — then add drills to build a full
+            session plan with GPS load estimates.
           </p>
         </div>
 
-        <div className="space-y-8">
-          {/* Format selector */}
+        {/* ── Step 1: Format ── */}
+        <div className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-6">
+          <StepHeader
+            n={1}
+            title="Select game format"
+            subtitle="How many players per side?"
+          />
           <FormatSelector selected={format} onSelect={handleFormat} />
+        </div>
 
-          {/* Reference panels */}
-          {format && (
+        {/* ── Step 2: Reference ── */}
+        {format && (
+          <div className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-6">
+            <StepHeader
+              n={2}
+              title="Choose a reference size"
+              subtitle="Click a card to seed the canvas — then reshape it freely"
+            />
             <ReferencePanel
               format={format}
               selectedKey={selectedKey}
               onSelect={handleRefSelect}
             />
-          )}
+          </div>
+        )}
 
-          {/* Canvas — shown once a reference is selected, or always if format chosen */}
-          {format && (
-            <section>
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-mono tracking-widest text-zinc-500 uppercase">
-                  Step 3 — Draw your pitch shape
-                </p>
-                <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer select-none">
+        {/* ── Step 3: Canvas ── */}
+        {format && (
+          <div className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-6">
+            <div className="flex items-start justify-between gap-4 mb-5">
+              <div className="flex items-start gap-3">
+                <span className="w-7 h-7 rounded-full bg-green-600 text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+                  3
+                </span>
+                <div>
+                  <h2 className="text-sm font-semibold text-white tracking-wide">Draw your pitch shape</h2>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    {seed
+                      ? "Drag the white corner dots to reshape, or click an edge midpoint to add a new point"
+                      : "Select a reference above to start from a rectangle, or draw freehand below"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0">
+                {seed && (
+                  <button
+                    onClick={() => setSeedVersion((v) => v + 1)}
+                    className="text-xs border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 px-3 py-1.5 rounded transition-colors"
+                  >
+                    ↺ Reset
+                  </button>
+                )}
+                <label className="flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer select-none">
                   <input
                     type="checkbox"
                     checked={snapEnabled}
                     onChange={(e) => setSnapEnabled(e.target.checked)}
                     className="accent-green-500"
                   />
-                  Snap to 1m grid
+                  Snap 1m
                 </label>
               </div>
+            </div>
 
-              {!seed && (
-                <div className="border border-dashed border-zinc-800 rounded-xl p-6 text-center text-zinc-600 text-sm mb-3">
-                  Select a reference size above to seed the canvas with a starting rectangle,
-                  or{" "}
-                  <button
-                    onClick={() => setSeed(null)}
-                    className="text-zinc-400 underline hover:text-white transition-colors"
-                  >
-                    draw freehand
-                  </button>{" "}
-                  below.
-                </div>
-              )}
+            {!seed && (
+              <div className="border border-dashed border-zinc-700 rounded-lg p-4 text-center text-zinc-500 text-sm mb-4">
+                ↑ Select a reference size above to seed the canvas, or click the pitch to draw freehand
+              </div>
+            )}
 
-              <PitchCanvas
-                seed={seed}
-                seedVersion={seedVersion}
-                snapEnabled={snapEnabled}
-              />
+            <PitchCanvas
+              seed={seed}
+              seedVersion={seedVersion}
+              snapEnabled={snapEnabled}
+              onAddDrill={seed ? handleAddDrill : undefined}
+            />
+          </div>
+        )}
 
-              {seed && (
-                <div className="mt-3 flex items-center gap-3">
-                  <button
-                    onClick={() => setSeedVersion((v) => v + 1)}
-                    className="text-xs border border-zinc-800 text-zinc-400 hover:text-white px-3 py-1.5 rounded transition-colors"
-                  >
-                    ↺ Reset to {seed.refLabel}
-                  </button>
-                  <button
-                    onClick={() => { setSeed(null); setSelectedKey(null); }}
-                    className="text-xs border border-zinc-800 text-zinc-400 hover:text-white px-3 py-1.5 rounded transition-colors"
-                  >
-                    Draw freehand
-                  </button>
-                </div>
-              )}
-            </section>
-          )}
+        {/* ── Step 4: Session GPS Planner ── */}
+        {format && (
+          <div ref={sessionRef} className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-6">
+            <StepHeader
+              n={4}
+              title="Session GPS load planner"
+              subtitle="Set a target, add drills from the canvas, and track your session load"
+            />
+            <SessionPlanner
+              drills={drills}
+              onRemoveDrill={handleRemoveDrill}
+              onUpdateDrill={handleUpdateDrill}
+              onTotalsChange={handleTotalsChange}
+            />
+          </div>
+        )}
+
+        {/* ── Step 5: Drill Library ── */}
+        <div className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-6">
+          <StepHeader
+            n={5}
+            title="Drill library"
+            subtitle="Save drills from your session to reuse in future plans"
+          />
+          <DrillLibrary onLoadDrill={setLibraryDrill} />
         </div>
+
       </div>
+
+      <footer className="border-t border-zinc-900 py-5 text-center text-xs text-zinc-700 mt-8 mb-14">
+        Pitch Planner · Based on Riboli et al. (2020) · Built for women&apos;s football coaches
+      </footer>
+
+      {/* ── Drill detail modal ── */}
+      {pendingDrill && seed && format && (
+        <DrillModal
+          pending={pendingDrill}
+          format={format}
+          seed={seed}
+          onConfirm={handleDrillConfirm}
+          onCancel={() => setPendingDrill(null)}
+        />
+      )}
+
+      {/* ── Library load modal ── */}
+      {libraryDrill && (
+        <LibraryLoadModal
+          drill={libraryDrill}
+          onConfirm={(drill) => {
+            handleDrillConfirm(drill);
+            setLibraryDrill(null);
+          }}
+          onCancel={() => setLibraryDrill(null)}
+        />
+      )}
+
+      {/* ── Sticky session totals bar ── */}
+      {drills.length > 0 && stickyTotals && stickyTargets && (
+        <div className="fixed bottom-0 left-0 right-0 z-20 bg-zinc-900/95 backdrop-blur-sm border-t border-zinc-800 shadow-2xl">
+          <div className="max-w-5xl mx-auto px-4 py-2.5 flex items-center gap-3 flex-wrap">
+            {/* Drill count pill */}
+            <span className="flex items-center gap-1.5 text-xs text-zinc-400 shrink-0">
+              <span className="w-4 h-4 rounded-full bg-green-600 text-white text-xs font-bold flex items-center justify-center leading-none">
+                {drills.length}
+              </span>
+              {drills.length === 1 ? "drill" : "drills"}
+            </span>
+
+            {/* Metric mini-bars — distance, HSR, accels, decels (4 most important) */}
+            <div className="flex-1 grid grid-cols-4 gap-3 min-w-0">
+              {METRICS.filter((m) => m.key !== "sprint").map((m) => {
+                const actual = stickyTotals[m.key];
+                const target = stickyTargets[m.key];
+                const pct = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
+                const done = target > 0 && actual >= target;
+                return (
+                  <div key={m.key} className="min-w-0">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs text-zinc-500">{m.label}</span>
+                      <span className={`text-xs font-mono ${done ? "text-green-400" : "text-zinc-400"}`}>
+                        {done ? "✓" : `${Math.round(pct)}%`}
+                      </span>
+                    </div>
+                    <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-300 ${done ? "bg-green-400" : m.color}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Jump to session */}
+            <button
+              onClick={() => sessionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              className="text-xs border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 px-3 py-1.5 rounded shrink-0 transition-colors"
+            >
+              ↓ Session
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
