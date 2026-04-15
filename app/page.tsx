@@ -402,29 +402,6 @@ export default function PitchPlannerPage() {
   return (
     <main className="min-h-screen bg-zinc-950 text-white">
 
-      {/* ── Header ── */}
-      <header className="border-b border-zinc-900 bg-black/60 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-2 h-2 rounded-full bg-green-500" />
-            <span className="text-sm font-semibold tracking-tight">Pitch Planner</span>
-            <span className="text-xs text-zinc-600 hidden sm:block">
-              Women&apos;s football training zone designer
-            </span>
-          </div>
-          {drills.length > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="w-5 h-5 rounded-full bg-green-600 text-white text-xs font-bold flex items-center justify-center">
-                {drills.length}
-              </span>
-              <span className="text-xs text-zinc-400">
-                {drills.length === 1 ? "drill" : "drills"} in session
-              </span>
-            </div>
-          )}
-        </div>
-      </header>
-
       <div className="max-w-5xl mx-auto px-4 py-8 space-y-5">
 
         {/* ── Hero ── */}
