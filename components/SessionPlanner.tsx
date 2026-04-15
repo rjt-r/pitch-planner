@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   SESSION_TYPES,
   POSITION_DATA,
@@ -24,6 +24,8 @@ interface SessionPlannerProps {
   drills: Drill[];
   onRemoveDrill: (id: string) => void;
   onUpdateDrill: (id: string, updates: Partial<Drill>) => void;
+  /** Fires whenever totals or targets change — used by parent to drive sticky bar */
+  onTotalsChange?: (totals: GPSEstimate, targets: GPSEstimate) => void;
 }
 
 function sumGPS(drills: Drill[]): GPSEstimate {
@@ -156,17 +158,9 @@ function buildCSV(
     [],
     ["#", "Name", "Format", "Duration (min)", "RPA (m\u00b2/pl)", "Distance (m)", "HSR (m)", "Sprint (m)", "Accels", "Decels", "RPE"],
     ...drills.map((d, i) => [
-      String(i + 1),
-      d.name,
-      d.format,
-      String(d.durationMins),
-      d.rpa.toFixed(1),
-      String(d.gps.distance),
-      String(d.gps.hsr),
-      String(d.gps.sprint),
-      String(d.gps.accels),
-      String(d.gps.decels),
-      String(d.rpe),
+      String(i + 1), d.name, d.format, String(d.durationMins), d.rpa.toFixed(1),
+      String(d.gps.distance), String(d.gps.hsr), String(d.gps.sprint),
+      String(d.gps.accels), String(d.gps.decels), String(d.rpe),
     ]),
     [],
     ["TOTALS", "", "", String(drills.reduce((s, d) => s + d.durationMins, 0)), "",
@@ -186,6 +180,7 @@ export default function SessionPlanner({
   drills,
   onRemoveDrill,
   onUpdateDrill,
+  onTotalsChange,
 }: SessionPlannerProps) {
   const [mode, setMode] = useState<"session" | "position">("session");
   const [sessionKey, setSessionKey] = useState("intensive");
@@ -194,15 +189,32 @@ export default function SessionPlanner({
   const [expandedDrill, setExpandedDrill] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // ── Editable targets: per-sessionKey overrides on top of SESSION_TYPES defaults ──
+  const [customOverrides, setCustomOverrides] = useState<
+    Record<string, Partial<GPSEstimate>>
+  >({});
+  const [editingTarget, setEditingTarget] = useState(false);
+
+  // Effective targets for current selection
+  const baseSessionTarget = SESSION_TYPES[sessionKey];
+  const overrides = customOverrides[sessionKey] ?? {};
+  const effectiveSessionTarget: GPSEstimate = {
+    distance: overrides.distance ?? baseSessionTarget.distance,
+    hsr:      overrides.hsr      ?? baseSessionTarget.hsr,
+    sprint:   overrides.sprint   ?? baseSessionTarget.sprint,
+    accels:   overrides.accels   ?? baseSessionTarget.accels,
+    decels:   overrides.decels   ?? baseSessionTarget.decels,
+  };
+
   const targets: GPSEstimate =
     mode === "session"
-      ? SESSION_TYPES[sessionKey]
+      ? effectiveSessionTarget
       : {
           distance: Math.round(POSITION_DATA[positionKey].distance * (matchPct / 100)),
           hsr:      Math.round(POSITION_DATA[positionKey].hsr      * (matchPct / 100)),
-          sprint:   Math.round(POSITION_DATA[positionKey].sprint    * (matchPct / 100)),
-          accels:   Math.round(POSITION_DATA[positionKey].accels    * (matchPct / 100)),
-          decels:   Math.round(POSITION_DATA[positionKey].decels    * (matchPct / 100)),
+          sprint:   Math.round(POSITION_DATA[positionKey].sprint   * (matchPct / 100)),
+          accels:   Math.round(POSITION_DATA[positionKey].accels   * (matchPct / 100)),
+          decels:   Math.round(POSITION_DATA[positionKey].decels   * (matchPct / 100)),
         };
 
   const totals = sumGPS(drills);
@@ -211,6 +223,29 @@ export default function SessionPlanner({
     drills.length > 0
       ? Math.round((drills.reduce((s, d) => s + d.rpe, 0) / drills.length) * 10) / 10
       : 0;
+
+  // Notify parent of totals/targets whenever they change
+  useEffect(() => {
+    onTotalsChange?.(totals, targets);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drills, targets.distance, targets.hsr, targets.sprint, targets.accels, targets.decels]);
+
+  function setOverride(k: keyof GPSEstimate, val: number) {
+    setCustomOverrides((prev) => ({
+      ...prev,
+      [sessionKey]: { ...(prev[sessionKey] ?? {}), [k]: val },
+    }));
+  }
+
+  function resetOverrides() {
+    setCustomOverrides((prev) => {
+      const next = { ...prev };
+      delete next[sessionKey];
+      return next;
+    });
+  }
+
+  const hasOverride = Object.keys(customOverrides[sessionKey] ?? {}).length > 0;
 
   function handleCopy() {
     const text = buildClipboardText(drills, targets, totals, mode, sessionKey, positionKey, matchPct);
@@ -238,7 +273,7 @@ export default function SessionPlanner({
         {(["session", "position"] as const).map((m) => (
           <button
             key={m}
-            onClick={() => setMode(m)}
+            onClick={() => { setMode(m); setEditingTarget(false); }}
             className={`px-4 py-1.5 rounded-md text-xs font-medium transition-colors ${
               mode === m
                 ? "bg-green-600 text-white"
@@ -255,22 +290,96 @@ export default function SessionPlanner({
         <div className="space-y-2">
           <p className="text-xs text-zinc-500">Choose the session type to set GPS targets:</p>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {Object.entries(SESSION_TYPES).map(([key, st]) => (
-              <button
-                key={key}
-                onClick={() => setSessionKey(key)}
-                className={`text-left px-3 py-2.5 rounded-lg border text-xs transition-colors ${
-                  sessionKey === key
-                    ? "border-green-600 bg-green-950/50 text-green-300"
-                    : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-white"
-                }`}
-              >
-                <span className="font-bold block text-sm leading-tight">{st.label}</span>
-                <span className="text-zinc-500 mt-0.5 block">{st.subtitle}</span>
-                <span className="text-zinc-600 block mt-1">{st.distance.toLocaleString()}m · RPE {st.rpe}</span>
-              </button>
-            ))}
+            {Object.entries(SESSION_TYPES).map(([key, st]) => {
+              const isSelected = sessionKey === key;
+              const ov = customOverrides[key] ?? {};
+              const isCustomised = Object.keys(ov).length > 0;
+              return (
+                <button
+                  key={key}
+                  onClick={() => { setSessionKey(key); setEditingTarget(false); }}
+                  className={`text-left px-3 py-2.5 rounded-lg border text-xs transition-colors ${
+                    isSelected
+                      ? "border-green-600 bg-green-950/50 text-green-300"
+                      : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-white"
+                  }`}
+                >
+                  <span className="font-bold block text-sm leading-tight">{st.label}</span>
+                  <span className="text-zinc-500 mt-0.5 block">{st.subtitle}</span>
+                  <span className="text-zinc-600 block mt-1">
+                    {(ov.distance ?? st.distance).toLocaleString()}m · RPE {st.rpe}
+                    {isCustomised && <span className="ml-1 text-amber-600">✎</span>}
+                  </span>
+                </button>
+              );
+            })}
           </div>
+
+          {/* Editable targets for selected session type */}
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={() => setEditingTarget((v) => !v)}
+              className="text-xs text-zinc-600 hover:text-zinc-300 underline underline-offset-2 transition-colors"
+            >
+              {editingTarget ? "Done editing" : `Customise ${SESSION_TYPES[sessionKey].label} targets for your squad`}
+            </button>
+            {hasOverride && !editingTarget && (
+              <button
+                onClick={resetOverrides}
+                className="text-xs text-zinc-700 hover:text-red-400 transition-colors"
+              >
+                Reset to defaults
+              </button>
+            )}
+          </div>
+
+          {editingTarget && (
+            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-zinc-400 font-medium">
+                  {SESSION_TYPES[sessionKey].label} targets{" "}
+                  <span className="text-zinc-600 font-normal">— edit for your squad</span>
+                </p>
+                {hasOverride && (
+                  <button
+                    onClick={resetOverrides}
+                    className="text-xs text-zinc-600 hover:text-red-400 transition-colors"
+                  >
+                    Reset to defaults
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                {METRICS.map((m) => {
+                  const defaultVal = baseSessionTarget[m.key];
+                  const currentVal = effectiveSessionTarget[m.key];
+                  const isEdited = currentVal !== defaultVal;
+                  return (
+                    <div key={m.key}>
+                      <label className="text-xs text-zinc-500 block mb-1">
+                        {m.label}{m.unit ? ` (${m.unit})` : ""}
+                        {isEdited && (
+                          <span className="ml-1 text-amber-600 text-xs">✎</span>
+                        )}
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={currentVal}
+                        onChange={(e) => setOverride(m.key, Number(e.target.value))}
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-green-600"
+                      />
+                      {isEdited && (
+                        <p className="text-xs text-zinc-700 mt-0.5 font-mono">
+                          default: {defaultVal.toLocaleString()}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -311,7 +420,7 @@ export default function SessionPlanner({
       )}
 
       {/* ── Progress bars ── */}
-      <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-3">
+      <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-3" id="session-totals">
         <div className="flex items-center justify-between mb-1">
           <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Session Running Total</h3>
           <div className="flex gap-4 text-xs text-zinc-600">
@@ -347,10 +456,7 @@ export default function SessionPlanner({
           {drills.map((drill, idx) => {
             const isExpanded = expandedDrill === drill.id;
             return (
-              <div
-                key={drill.id}
-                className="bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden"
-              >
+              <div key={drill.id} className="bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden">
                 {/* Drill header */}
                 <div className="flex items-center gap-3 px-4 py-3">
                   <span className="w-6 h-6 rounded-full bg-zinc-800 text-zinc-400 text-xs flex items-center justify-center shrink-0 font-mono">
@@ -378,7 +484,7 @@ export default function SessionPlanner({
                   </div>
                 </div>
 
-                {/* GPS summary row — ~ prefix on all estimates */}
+                {/* GPS summary row */}
                 <div className="px-4 pb-3 grid grid-cols-5 gap-2">
                   {METRICS.map((m) => (
                     <div key={m.key} className="text-center">
@@ -393,7 +499,6 @@ export default function SessionPlanner({
                 {/* Expanded editor */}
                 {isExpanded && (
                   <div className="border-t border-zinc-800 px-4 py-4 space-y-4 bg-zinc-900/40">
-                    {/* Name */}
                     <div>
                       <label className="text-xs text-zinc-400 block mb-1">Drill name</label>
                       <input
@@ -403,9 +508,7 @@ export default function SessionPlanner({
                         className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-green-600"
                       />
                     </div>
-
                     <div className="grid grid-cols-2 gap-4">
-                      {/* Duration */}
                       <div>
                         <label className="text-xs text-zinc-400 block mb-1">
                           Duration: <span className="text-white font-semibold">{drill.durationMins} min</span>
@@ -416,8 +519,6 @@ export default function SessionPlanner({
                           className="w-full accent-green-500"
                         />
                       </div>
-
-                      {/* RPE */}
                       <div>
                         <label className="text-xs text-zinc-400 block mb-1">
                           RPE: <span className="text-white font-semibold">{drill.rpe}</span>
@@ -429,8 +530,6 @@ export default function SessionPlanner({
                         />
                       </div>
                     </div>
-
-                    {/* GPS overrides */}
                     <div>
                       <p className="text-xs text-zinc-400 mb-2">GPS estimates (editable):</p>
                       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
@@ -438,9 +537,7 @@ export default function SessionPlanner({
                           <div key={m.key}>
                             <label className="text-xs text-zinc-500 block mb-1">{m.label}{m.unit ? ` (${m.unit})` : ""}</label>
                             <input
-                              type="number"
-                              min={0}
-                              value={drill.gps[m.key]}
+                              type="number" min={0} value={drill.gps[m.key]}
                               onChange={(e) =>
                                 onUpdateDrill(drill.id, {
                                   gps: { ...drill.gps, [m.key]: Number(e.target.value) },

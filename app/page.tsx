@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import FormatSelector from "@/components/FormatSelector";
 import ReferencePanel from "@/components/ReferencePanel";
 import PitchCanvas from "@/components/PitchCanvas";
 import SessionPlanner, { type Drill } from "@/components/SessionPlanner";
-import { estimateGPSRange, type GPSRangeEstimate } from "@/lib/gps-targets";
+import { estimateGPSRange, type GPSRangeEstimate, type GPSEstimate, METRICS } from "@/lib/gps-targets";
 import type { SeedConfig } from "@/components/ReferencePanel";
 
 function StepHeader({ n, title, subtitle }: { n: number; title: string; subtitle?: string }) {
@@ -214,6 +214,16 @@ export default function PitchPlannerPage() {
   const [drills, setDrills] = useState<Drill[]>([]);
   const [pendingDrill, setPendingDrill] = useState<PendingDrill | null>(null);
 
+  // Sticky bar state — updated by SessionPlanner via callback
+  const [stickyTotals, setStickyTotals] = useState<GPSEstimate | null>(null);
+  const [stickyTargets, setStickyTargets] = useState<GPSEstimate | null>(null);
+  const sessionRef = useRef<HTMLDivElement>(null);
+
+  const handleTotalsChange = useCallback((totals: GPSEstimate, targets: GPSEstimate) => {
+    setStickyTotals(totals);
+    setStickyTargets(targets);
+  }, []);
+
   function handleFormat(f: string) {
     setFormat(f);
     setSelectedKey(null);
@@ -370,7 +380,7 @@ export default function PitchPlannerPage() {
 
         {/* ── Step 4: Session GPS Planner ── */}
         {format && (
-          <div className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-6">
+          <div ref={sessionRef} className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-6">
             <StepHeader
               n={4}
               title="Session GPS load planner"
@@ -380,13 +390,14 @@ export default function PitchPlannerPage() {
               drills={drills}
               onRemoveDrill={handleRemoveDrill}
               onUpdateDrill={handleUpdateDrill}
+              onTotalsChange={handleTotalsChange}
             />
           </div>
         )}
 
       </div>
 
-      <footer className="border-t border-zinc-900 py-5 text-center text-xs text-zinc-700 mt-8">
+      <footer className="border-t border-zinc-900 py-5 text-center text-xs text-zinc-700 mt-8 mb-14">
         Pitch Planner · Based on Riboli et al. (2020) · Built for women&apos;s football coaches
       </footer>
 
@@ -399,6 +410,55 @@ export default function PitchPlannerPage() {
           onConfirm={handleDrillConfirm}
           onCancel={() => setPendingDrill(null)}
         />
+      )}
+
+      {/* ── Sticky session totals bar ── */}
+      {drills.length > 0 && stickyTotals && stickyTargets && (
+        <div className="fixed bottom-0 left-0 right-0 z-20 bg-zinc-900/95 backdrop-blur-sm border-t border-zinc-800 shadow-2xl">
+          <div className="max-w-5xl mx-auto px-4 py-2.5 flex items-center gap-3 flex-wrap">
+            {/* Drill count pill */}
+            <span className="flex items-center gap-1.5 text-xs text-zinc-400 shrink-0">
+              <span className="w-4 h-4 rounded-full bg-green-600 text-white text-xs font-bold flex items-center justify-center leading-none">
+                {drills.length}
+              </span>
+              {drills.length === 1 ? "drill" : "drills"}
+            </span>
+
+            {/* Metric mini-bars — distance, HSR, accels, decels (4 most important) */}
+            <div className="flex-1 grid grid-cols-4 gap-3 min-w-0">
+              {METRICS.filter((m) => m.key !== "sprint").map((m) => {
+                const actual = stickyTotals[m.key];
+                const target = stickyTargets[m.key];
+                const pct = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
+                const done = target > 0 && actual >= target;
+                return (
+                  <div key={m.key} className="min-w-0">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs text-zinc-500">{m.label}</span>
+                      <span className={`text-xs font-mono ${done ? "text-green-400" : "text-zinc-400"}`}>
+                        {done ? "✓" : `${Math.round(pct)}%`}
+                      </span>
+                    </div>
+                    <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-300 ${done ? "bg-green-400" : m.color}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Jump to session */}
+            <button
+              onClick={() => sessionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              className="text-xs border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 px-3 py-1.5 rounded shrink-0 transition-colors"
+            >
+              ↓ Session
+            </button>
+          </div>
+        </div>
       )}
     </main>
   );
