@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import {
   SESSION_TYPES,
   POSITION_DATA,
@@ -46,16 +46,17 @@ function scaleSessionGPS(sessionType: string, durationMins: number): GPSEstimate
   };
 }
 
-function getDayGPS(day: WeekDayConfig, position: string): GPSEstimate | null {
-  if (day.type === "rest")     return null;
-  if (day.type === "match")    return { ...POSITION_DATA[position] };
+// matchGPS is passed in so overrides flow through without touching POSITION_DATA directly
+function getDayGPS(day: WeekDayConfig, matchGPS: GPSEstimate): GPSEstimate | null {
+  if (day.type === "rest")  return null;
+  if (day.type === "match") return { ...matchGPS };
   return scaleSessionGPS(day.sessionType, day.durationMins);
 }
 
-function computeWeekGPS(week: WeekDayConfig[], position: string): GPSEstimate {
+function computeWeekGPS(week: WeekDayConfig[], matchGPS: GPSEstimate): GPSEstimate {
   const zero: GPSEstimate = { distance: 0, hsr: 0, sprint: 0, accels: 0, decels: 0 };
   return week.reduce((acc, d) => {
-    const gps = getDayGPS(d, position);
+    const gps = getDayGPS(d, matchGPS);
     if (!gps) return acc;
     return {
       distance: acc.distance + gps.distance,
@@ -67,14 +68,13 @@ function computeWeekGPS(week: WeekDayConfig[], position: string): GPSEstimate {
   }, zero);
 }
 
-function computeWeekTarget(position: string, multiplier: number): GPSEstimate {
-  const m = POSITION_DATA[position];
+function computeWeekTarget(matchGPS: GPSEstimate, multiplier: number): GPSEstimate {
   return {
-    distance: Math.round(m.distance * multiplier),
-    hsr:      Math.round(m.hsr      * multiplier),
-    sprint:   Math.round(m.sprint   * multiplier),
-    accels:   Math.round(m.accels   * multiplier),
-    decels:   Math.round(m.decels   * multiplier),
+    distance: Math.round(matchGPS.distance * multiplier),
+    hsr:      Math.round(matchGPS.hsr      * multiplier),
+    sprint:   Math.round(matchGPS.sprint   * multiplier),
+    accels:   Math.round(matchGPS.accels   * multiplier),
+    decels:   Math.round(matchGPS.decels   * multiplier),
   };
 }
 
@@ -87,15 +87,14 @@ function buildCopyText(
   week: WeekDayConfig[],
   weekGPS: GPSEstimate,
   weekTarget: GPSEstimate,
-  matchGPS: typeof POSITION_DATA[string],
-  position: string,
+  effectiveMatchGPS: GPSEstimate,
+  posLabel: string,
   multiplier: number,
   trainCount: number,
   totalMins: number,
   matchCount: number,
   avgRpe: number | null
 ): string {
-  const posLabel = POSITION_DATA[position].label;
   const lines: string[] = [
     `WEEKLY LOAD FORECAST — ${formatDate()}`,
     `Position: ${posLabel}  |  Target: ${multiplier}× match load`,
@@ -106,7 +105,7 @@ function buildCopyText(
     if (d.type === "rest") {
       lines.push(`${d.dayLabel}  Rest`);
     } else if (d.type === "match") {
-      const g = POSITION_DATA[position];
+      const g = effectiveMatchGPS;
       lines.push(
         `${d.dayLabel}  Match (${posLabel})  |  ~${g.distance.toLocaleString()}m · ~${g.hsr}m HSR · ~${g.sprint}m sprint · ~${g.accels} acc · ~${g.decels} dec`
       );
@@ -115,8 +114,8 @@ function buildCopyText(
       const st = SESSION_TYPES[d.sessionType];
       const parts = [
         `~${g.distance.toLocaleString()}m`,
-        g.hsr > 0 ? `~${g.hsr}m HSR` : null,
-        g.sprint > 0 ? `~${g.sprint}m sprint` : null,
+        g.hsr    > 0 ? `~${g.hsr}m HSR`       : null,
+        g.sprint > 0 ? `~${g.sprint}m sprint`  : null,
         `~${g.accels} acc`,
         `~${g.decels} dec`,
       ].filter(Boolean).join(" · ");
@@ -124,14 +123,14 @@ function buildCopyText(
     }
   });
 
-  lines.push("");
-  lines.push("WEEKLY TOTALS");
-
+  lines.push("", "WEEKLY TOTALS");
   METRICS.forEach((m) => {
     const actual = weekGPS[m.key];
     const target = weekTarget[m.key];
-    const pct = target > 0 ? Math.round((actual / target) * 100) : 0;
-    const matchX = matchGPS[m.key] > 0 ? (actual / matchGPS[m.key]).toFixed(1) + "× match" : "—";
+    const pct    = target > 0 ? Math.round((actual / target) * 100) : 0;
+    const matchX = effectiveMatchGPS[m.key] > 0
+      ? (actual / effectiveMatchGPS[m.key]).toFixed(1) + "× match"
+      : "—";
     lines.push(
       `  ${m.label.padEnd(10)} ~${actual.toLocaleString()}${m.unit}  /  ${target.toLocaleString()}${m.unit} target  (${pct}%)   ${matchX}`
     );
@@ -158,9 +157,44 @@ export default function ForecasterPage() {
   const [multiplier, setMultiplier]   = useState(3.5);
   const [copied, setCopied]           = useState(false);
 
-  const weekGPS    = useMemo(() => computeWeekGPS(week, position),          [week, position]);
-  const weekTarget = useMemo(() => computeWeekTarget(position, multiplier),  [position, multiplier]);
-  const matchGPS   = POSITION_DATA[position];
+  // ── Editable match-day demands ────────────────────────────────────────
+  const [customPositionOverrides, setCustomPositionOverrides] = useState<
+    Record<string, Partial<GPSEstimate>>
+  >({});
+  const [editingPosition, setEditingPosition] = useState(false);
+
+  const posBase = POSITION_DATA[position];
+  const posOv   = customPositionOverrides[position] ?? {};
+
+  // effectiveMatchGPS merges the squad's actual data (overrides) over the research defaults
+  const effectiveMatchGPS: GPSEstimate = {
+    distance: posOv.distance ?? posBase.distance,
+    hsr:      posOv.hsr      ?? posBase.hsr,
+    sprint:   posOv.sprint   ?? posBase.sprint,
+    accels:   posOv.accels   ?? posBase.accels,
+    decels:   posOv.decels   ?? posBase.decels,
+  };
+
+  const hasPosOverride = Object.keys(posOv).length > 0;
+
+  function setPosOverride(k: keyof GPSEstimate, val: number) {
+    setCustomPositionOverrides(prev => ({
+      ...prev,
+      [position]: { ...(prev[position] ?? {}), [k]: val },
+    }));
+  }
+
+  function resetPosOverrides() {
+    setCustomPositionOverrides(prev => {
+      const next = { ...prev };
+      delete next[position];
+      return next;
+    });
+  }
+
+  // All GPS calculations use effectiveMatchGPS — overrides flow through automatically
+  const weekGPS    = computeWeekGPS(week, effectiveMatchGPS);
+  const weekTarget = computeWeekTarget(effectiveMatchGPS, multiplier);
 
   // Derived summary stats
   const trainDays  = week.filter(d => d.type === "training");
@@ -176,7 +210,10 @@ export default function ForecasterPage() {
   }
 
   function handleCopy() {
-    const text = buildCopyText(week, weekGPS, weekTarget, matchGPS, position, multiplier, trainCount, totalMins, matchCount, avgRpe);
+    const text = buildCopyText(
+      week, weekGPS, weekTarget, effectiveMatchGPS,
+      posBase.label, multiplier, trainCount, totalMins, matchCount, avgRpe
+    );
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -199,27 +236,99 @@ export default function ForecasterPage() {
 
         {/* ── Controls: position + multiplier ── */}
         <div className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-6 space-y-5">
-          {/* Position */}
+
+          {/* Position selector */}
           <div>
-            <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
-              Position — drives match GPS &amp; weekly target
-            </p>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                Position — drives match GPS &amp; weekly target
+              </p>
+              {/* Edit match-day values button */}
+              <button
+                onClick={() => setEditingPosition(v => !v)}
+                title="Edit match-day GPS demands for your squad"
+                className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded border transition-colors ${
+                  hasPosOverride
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                    : editingPosition
+                    ? "border-green-700 bg-green-950/50 text-green-400"
+                    : "border-zinc-700 text-zinc-500 hover:text-white hover:border-zinc-500"
+                }`}
+              >
+                ✎ {hasPosOverride ? "Edited" : "Edit values"}
+              </button>
+            </div>
+
             <div className="flex flex-wrap gap-2">
-              {Object.entries(POSITION_DATA).map(([key, pos]) => (
-                <button
-                  key={key}
-                  onClick={() => setPosition(key)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                    position === key
-                      ? "border-green-600 bg-green-950/50 text-green-300"
-                      : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-white"
-                  }`}
-                >
-                  {pos.label}
-                </button>
-              ))}
+              {Object.entries(POSITION_DATA).map(([key, pos]) => {
+                const isCustomised = Object.keys(customPositionOverrides[key] ?? {}).length > 0;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => { setPosition(key); setEditingPosition(false); }}
+                    className={`relative px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                      position === key
+                        ? "border-green-600 bg-green-950/50 text-green-300"
+                        : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-white"
+                    }`}
+                  >
+                    {pos.label}
+                    {isCustomised && (
+                      <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
+
+          {/* Inline position editor */}
+          {editingPosition && (
+            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-zinc-400 font-medium">
+                  {posBase.label} match demands
+                  <span className="text-zinc-600 font-normal ml-1">— edit for your squad&apos;s actual GPS data</span>
+                </p>
+                {hasPosOverride && (
+                  <button
+                    onClick={resetPosOverrides}
+                    className="text-xs text-zinc-600 hover:text-red-400 transition-colors"
+                  >
+                    Reset to defaults
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                {METRICS.map(m => {
+                  const defaultVal = posBase[m.key];
+                  const currentVal = effectiveMatchGPS[m.key];
+                  const isEdited   = currentVal !== defaultVal;
+                  return (
+                    <div key={m.key}>
+                      <label className="text-xs text-zinc-500 block mb-1">
+                        {m.label}{m.unit ? ` (${m.unit})` : ""}
+                        {isEdited && <span className="ml-1 text-amber-500">✎</span>}
+                      </label>
+                      <input
+                        type="number" min={0} value={currentVal}
+                        onChange={e => setPosOverride(m.key, Number(e.target.value))}
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-green-600"
+                      />
+                      {isEdited && (
+                        <p className="text-xs text-zinc-700 mt-0.5 font-mono">
+                          default: {defaultVal.toLocaleString()}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-zinc-700">
+                Changes update the match-day GPS, weekly target bars, and match-equivalent multipliers. Amber dot on position button shows it has been customised.
+              </p>
+            </div>
+          )}
 
           {/* Weekly multiplier */}
           <div>
@@ -230,7 +339,7 @@ export default function ForecasterPage() {
               <span className="text-sm font-bold text-white">
                 {multiplier}× match load
                 <span className="text-xs font-normal text-zinc-500 ml-2">
-                  ({matchGPS.distance.toLocaleString()}m × {multiplier} = {weekTarget.distance.toLocaleString()}m target)
+                  ({effectiveMatchGPS.distance.toLocaleString()}m × {multiplier} = {weekTarget.distance.toLocaleString()}m target)
                 </span>
               </span>
             </div>
@@ -258,7 +367,7 @@ export default function ForecasterPage() {
           <div className="grid grid-cols-7 gap-2">
             {week.map((day, idx) => {
               const isSelected = selectedDay === idx;
-              const dayGPS = getDayGPS(day, position);
+              const dayGPS = getDayGPS(day, effectiveMatchGPS);
 
               let cardClass = "rounded-xl py-3 px-1.5 flex flex-col items-center text-center gap-1 cursor-pointer transition-all select-none ";
               if (day.type === "rest") {
@@ -288,7 +397,7 @@ export default function ForecasterPage() {
                     <>
                       <p className="text-xs font-bold text-green-400 mt-0.5">Match</p>
                       <p className="text-xs text-zinc-500 font-mono">
-                        {(matchGPS.distance / 1000).toFixed(1)}km
+                        {(effectiveMatchGPS.distance / 1000).toFixed(1)}km
                       </p>
                     </>
                   )}
@@ -422,25 +531,37 @@ export default function ForecasterPage() {
                 </>
               )}
 
-              {/* Match: GPS summary */}
+              {/* Match: GPS summary (uses effective values) */}
               {selectedDayData.type === "match" && (
                 <div>
-                  <p className="text-xs text-zinc-500 mb-2">
-                    Match GPS — {POSITION_DATA[position].label}
-                  </p>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs text-zinc-500">
+                      Match GPS — {posBase.label}
+                      {hasPosOverride && (
+                        <span className="ml-1.5 text-amber-400 text-xs">✎ edited</span>
+                      )}
+                    </p>
+                    <button
+                      onClick={() => { setEditingPosition(true); setSelectedDay(null); }}
+                      className="text-xs text-zinc-600 hover:text-zinc-300 transition-colors"
+                    >
+                      Edit values ↑
+                    </button>
+                  </div>
                   <div className="grid grid-cols-5 gap-2">
                     {METRICS.map(m => (
                       <div key={m.key} className="bg-zinc-900 border border-green-900/30 rounded-lg p-2 text-center">
                         <p className="text-xs text-zinc-500">{m.label}</p>
-                        <p className="text-xs font-mono font-semibold text-green-400 mt-0.5">
-                          {matchGPS[m.key].toLocaleString()}{m.unit}
+                        <p className={`text-xs font-mono font-semibold mt-0.5 ${
+                          hasPosOverride && effectiveMatchGPS[m.key] !== posBase[m.key]
+                            ? "text-amber-400"
+                            : "text-green-400"
+                        }`}>
+                          {effectiveMatchGPS[m.key].toLocaleString()}{m.unit}
                         </p>
                       </div>
                     ))}
                   </div>
-                  <p className="text-xs text-zinc-700 mt-2">
-                    Change position above to update match GPS values
-                  </p>
                 </div>
               )}
 
@@ -461,7 +582,8 @@ export default function ForecasterPage() {
               Weekly Forecast
             </p>
             <p className="text-xs text-zinc-600">
-              vs {multiplier}× {POSITION_DATA[position].label} match load
+              vs {multiplier}× {posBase.label} match load
+              {hasPosOverride && <span className="ml-1 text-amber-500">✎</span>}
             </p>
           </div>
 
@@ -486,14 +608,12 @@ export default function ForecasterPage() {
           {/* Metric bars */}
           <div className="space-y-4">
             {METRICS.map(m => {
-              const actual = weekGPS[m.key];
-              const target = weekTarget[m.key];
-              const pct    = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
-              const over   = actual >= target && target > 0;
-              const matchVal = matchGPS[m.key];
-              const matchX = matchVal > 0
-                ? (actual / matchVal).toFixed(1) + "×"
-                : "—";
+              const actual   = weekGPS[m.key];
+              const target   = weekTarget[m.key];
+              const pct      = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
+              const over     = actual >= target && target > 0;
+              const matchVal = effectiveMatchGPS[m.key];
+              const matchX   = matchVal > 0 ? (actual / matchVal).toFixed(1) + "×" : "—";
 
               return (
                 <div key={m.key}>
