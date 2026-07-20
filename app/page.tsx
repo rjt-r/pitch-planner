@@ -6,6 +6,7 @@ import ReferencePanel from "@/components/ReferencePanel";
 import PitchCanvas from "@/components/PitchCanvas";
 import SessionPlanner, { type Drill } from "@/components/SessionPlanner";
 import DrillLibrary from "@/components/DrillLibrary";
+import SessionPrintSheet from "@/components/SessionPrintSheet";
 import { estimateGPSRange, type GPSRangeEstimate, type GPSEstimate, METRICS } from "@/lib/gps-targets";
 import type { SeedConfig } from "@/components/ReferencePanel";
 import type { LibraryDrill } from "@/lib/drill-library";
@@ -360,11 +361,35 @@ export default function PitchPlannerPage() {
   // Sticky bar state — updated by SessionPlanner via callback
   const [stickyTotals, setStickyTotals] = useState<GPSEstimate | null>(null);
   const [stickyTargets, setStickyTargets] = useState<GPSEstimate | null>(null);
+  const [targetLabel, setTargetLabel] = useState<string | null>(null);
   const sessionRef = useRef<HTMLDivElement>(null);
 
-  const handleTotalsChange = useCallback((totals: GPSEstimate, targets: GPSEstimate) => {
-    setStickyTotals(totals);
-    setStickyTargets(targets);
+  const handleTotalsChange = useCallback(
+    (totals: GPSEstimate, targets: GPSEstimate, label: string) => {
+      setStickyTotals(totals);
+      setStickyTargets(targets);
+      setTargetLabel(label);
+    },
+    []
+  );
+
+  // ── PDF export — snapshot the drawn shape, render the print sheet, print ──
+  const [printVertices, setPrintVertices] = useState<{ x: number; y: number }[]>([]);
+
+  const handleExportPdf = useCallback(() => {
+    let vertices: { x: number; y: number }[] = [];
+    try {
+      const raw = localStorage.getItem("pitch-planner-shape");
+      if (raw) {
+        const saved = JSON.parse(raw) as { vertices?: { x: number; y: number }[] };
+        if (Array.isArray(saved.vertices)) vertices = saved.vertices;
+      }
+    } catch {
+      // no shape — the sheet simply omits the pitch drawing
+    }
+    setPrintVertices(vertices);
+    // Let React paint the sheet with fresh data before opening the dialog
+    setTimeout(() => window.print(), 50);
   }, []);
 
   function handleFormat(f: string) {
@@ -511,6 +536,7 @@ export default function PitchPlannerPage() {
               onRemoveDrill={handleRemoveDrill}
               onUpdateDrill={handleUpdateDrill}
               onTotalsChange={handleTotalsChange}
+              onExportPdf={handleExportPdf}
             />
           </div>
         )}
@@ -530,6 +556,17 @@ export default function PitchPlannerPage() {
       <footer className="border-t border-zinc-900 py-5 text-center text-xs text-zinc-700 mt-8 mb-14">
         Pitch Planner · Based on Riboli et al. (2020) · Built for women&apos;s football coaches
       </footer>
+
+      {/* ── Print-only session sheet (display:none on screen) ── */}
+      <SessionPrintSheet
+        format={format}
+        seed={seed}
+        vertices={printVertices}
+        drills={drills}
+        totals={stickyTotals}
+        targets={stickyTargets}
+        targetLabel={targetLabel}
+      />
 
       {/* ── Drill detail modal ── */}
       {pendingDrill && seed && format && (

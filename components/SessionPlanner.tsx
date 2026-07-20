@@ -28,7 +28,9 @@ interface SessionPlannerProps {
   onRemoveDrill: (id: string) => void;
   onUpdateDrill: (id: string, updates: Partial<Drill>) => void;
   /** Fires whenever totals or targets change — used by parent to drive sticky bar */
-  onTotalsChange?: (totals: GPSEstimate, targets: GPSEstimate) => void;
+  onTotalsChange?: (totals: GPSEstimate, targets: GPSEstimate, targetLabel: string) => void;
+  /** When set, shows an "Export PDF" button in the export bar */
+  onExportPdf?: () => void;
 }
 
 function sumGPS(drills: Drill[]): GPSEstimate {
@@ -199,6 +201,7 @@ export default function SessionPlanner({
   onRemoveDrill,
   onUpdateDrill,
   onTotalsChange,
+  onExportPdf,
 }: SessionPlannerProps) {
   // Target selection persists across visits — a coach sets this up once
   const [mode, setMode] = usePersistentState<"session" | "position">("pitch-planner-target-mode", "session");
@@ -268,7 +271,11 @@ export default function SessionPlanner({
 
   // Notify parent of totals/targets whenever they change
   useEffect(() => {
-    onTotalsChange?.(totals, targets);
+    onTotalsChange?.(
+      totals,
+      targets,
+      targetLabel(mode, sessionKey, positionKey, matchPct, targets)
+    );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drills, targets.distance, targets.hsr, targets.sprint, targets.accels, targets.decels]);
 
@@ -772,6 +779,20 @@ export default function SessionPlanner({
               "Export session plan"
             )}
           </span>
+        )}
+        {!namingSession && onExportPdf && (
+          <button
+            disabled={drills.length === 0}
+            onClick={onExportPdf}
+            title="Print or save the session plan as a one-page PDF — pitch drawing, drills, and load summary"
+            className={`text-xs px-3 py-1.5 rounded font-semibold transition-colors ${
+              drills.length === 0
+                ? "bg-zinc-800 text-zinc-600 cursor-not-allowed"
+                : "bg-green-600 hover:bg-green-500 text-white"
+            }`}
+          >
+            Export PDF
+          </button>
         )}
         {!namingSession && (
           <button
