@@ -8,6 +8,7 @@ import {
   type GPSEstimate,
 } from "@/lib/gps-targets";
 import { saveToLibrary } from "@/lib/drill-library";
+import { saveSessionToLibrary } from "@/lib/session-library";
 import { usePersistentState } from "@/lib/use-persistent-state";
 
 export type Drill = {
@@ -208,6 +209,11 @@ export default function SessionPlanner({
   const [copied, setCopied] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
 
+  // ── Save-session flow (feeds the Week forecaster) ──────────────────────
+  const [namingSession, setNamingSession] = useState(false);
+  const [sessionName, setSessionName] = useState("");
+  const [sessionSaved, setSessionSaved] = useState(false);
+
   // ── Editable session-type targets ────────────────────────────────────────
   // Persisted — squad-specific targets are the most painful thing to re-enter
   const [customOverrides, setCustomOverrides] = usePersistentState<
@@ -305,6 +311,25 @@ export default function SessionPlanner({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
+  }
+
+  function startNamingSession() {
+    setSessionName(`Session — ${formatDate()}`);
+    setNamingSession(true);
+  }
+
+  function confirmSaveSession() {
+    const name = sessionName.trim();
+    if (!name || drills.length === 0) return;
+    saveSessionToLibrary({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name,
+      drills,
+      savedAt: new Date().toISOString(),
+    });
+    setNamingSession(false);
+    setSessionSaved(true);
+    setTimeout(() => setSessionSaved(false), 4000);
   }
 
   function handleCSV() {
@@ -707,12 +732,61 @@ export default function SessionPlanner({
       )}
 
       {/* ── Export bar — always visible; buttons disabled until drills are added ── */}
-      <div className="flex items-center gap-3 pt-1 border-t border-zinc-800">
-        <span className="text-xs text-zinc-600 flex-1">
-          {drills.length === 0
-            ? "Export (add drills to unlock)"
-            : "Export session plan"}
-        </span>
+      <div className="flex items-center gap-3 pt-1 border-t border-zinc-800 flex-wrap">
+        {namingSession ? (
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <input
+              type="text"
+              value={sessionName}
+              onChange={(e) => setSessionName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") confirmSaveSession();
+                if (e.key === "Escape") setNamingSession(false);
+              }}
+              autoFocus
+              className="flex-1 min-w-0 bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-green-600"
+            />
+            <button
+              onClick={confirmSaveSession}
+              className="text-xs px-3 py-1.5 rounded bg-green-600 hover:bg-green-500 text-white font-semibold transition-colors shrink-0"
+            >
+              Save
+            </button>
+            <button
+              onClick={() => setNamingSession(false)}
+              className="text-xs px-2 py-1.5 rounded text-zinc-500 hover:text-white transition-colors shrink-0"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <span className="text-xs text-zinc-600 flex-1">
+            {drills.length === 0 ? (
+              "Export (add drills to unlock)"
+            ) : sessionSaved ? (
+              <span className="text-green-400">
+                Session saved ✓ — assign it to a day on the{" "}
+                <a href="/forecaster" className="underline hover:text-green-300">Week page</a>
+              </span>
+            ) : (
+              "Export session plan"
+            )}
+          </span>
+        )}
+        {!namingSession && (
+          <button
+            disabled={drills.length === 0}
+            onClick={startNamingSession}
+            title="Save this session so the Week forecaster can plan days from its real GPS totals"
+            className={`text-xs px-3 py-1.5 rounded border transition-colors ${
+              drills.length === 0
+                ? "border-zinc-800 text-zinc-700 cursor-not-allowed"
+                : "border-green-800 text-green-400 hover:text-green-300 hover:border-green-600"
+            }`}
+          >
+            Save session
+          </button>
+        )}
         <button
           disabled={drills.length === 0}
           onClick={handleCopy}

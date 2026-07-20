@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   SESSION_TYPES,
   POSITION_DATA,
@@ -8,15 +8,27 @@ import {
   type GPSEstimate,
 } from "@/lib/gps-targets";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import {
+  getSessionLibrary,
+  removeSessionFromLibrary,
+  resolvePlannedSession,
+  CURRENT_SESSION_ID,
+  type ResolvedSession,
+} from "@/lib/session-library";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 type DayType = "rest" | "training" | "match";
+type SessionSource = "benchmark" | "planned";
 
 interface WeekDayConfig {
   dayLabel: string;
   type: DayType;
   sessionType: string;   // key into SESSION_TYPES; preserved even on rest/match days
   durationMins: number;  // preserved on rest/match (restores when re-enabled)
+  // "planned" days pull real GPS from a session built on the Session page;
+  // absent (older saved weeks) means benchmark
+  source?: SessionSource;
+  plannedSessionId?: string; // CURRENT_SESSION_ID or a saved-session id
 }
 
 // ── Default week ──────────────────────────────────────────────────────────
@@ -47,28 +59,6 @@ function scaleSessionGPS(sessionType: string, durationMins: number): GPSEstimate
   };
 }
 
-// matchGPS is passed in so overrides flow through without touching POSITION_DATA directly
-function getDayGPS(day: WeekDayConfig, matchGPS: GPSEstimate): GPSEstimate | null {
-  if (day.type === "rest")  return null;
-  if (day.type === "match") return { ...matchGPS };
-  return scaleSessionGPS(day.sessionType, day.durationMins);
-}
-
-function computeWeekGPS(week: WeekDayConfig[], matchGPS: GPSEstimate): GPSEstimate {
-  const zero: GPSEstimate = { distance: 0, hsr: 0, sprint: 0, accels: 0, decels: 0 };
-  return week.reduce((acc, d) => {
-    const gps = getDayGPS(d, matchGPS);
-    if (!gps) return acc;
-    return {
-      distance: acc.distance + gps.distance,
-      hsr:      acc.hsr      + gps.hsr,
-      sprint:   acc.sprint   + gps.sprint,
-      accels:   acc.accels   + gps.accels,
-      decels:   acc.decels   + gps.decels,
-    };
-  }, zero);
-}
-
 function computeWeekTarget(matchGPS: GPSEstimate, multiplier: number): GPSEstimate {
   return {
     distance: Math.round(matchGPS.distance * multiplier),
@@ -94,7 +84,8 @@ function buildCopyText(
   trainCount: number,
   totalMins: number,
   matchCount: number,
-  avgRpe: number | null
+  avgRpe: number | null,
+  resolveDay: (d: WeekDayConfig) => ResolvedSession | null
 ): string {
   const lines: string[] = [
     `WEEKLY LOAD FORECAST — ${formatDate()}`,
@@ -111,8 +102,12 @@ function buildCopyText(
         `${d.dayLabel}  Match (${posLabel})  |  ~${g.distance.toLocaleString()}m · ~${g.hsr}m HSR · ~${g.sprint}m sprint · ~${g.accels} acc · ~${g.decels} dec`
       );
     } else {
-      const g = scaleSessionGPS(d.sessionType, d.durationMins);
-      const st = SESSION_TYPES[d.sessionType];
+      const resolved = resolveDay(d);
+      const g = resolved ? resolved.gps : scaleSessionGPS(d.sessionType, d.durationMins);
+      const label = resolved
+        ? `Planned: ${resolved.name}`
+        : SESSION_TYPES[d.sessionType].label;
+      const mins = resolved ? resolved.durationMins : d.durationMins;
       const parts = [
         `~${g.distance.toLocaleString()}m`,
         g.hsr    > 0 ? `~${g.hsr}m HSR`       : null,
@@ -120,7 +115,7 @@ function buildCopyText(
         `~${g.accels} acc`,
         `~${g.decels} dec`,
       ].filter(Boolean).join(" · ");
-      lines.push(`${d.dayLabel}  ${st.label} — ${d.durationMins} min  |  ${parts}`);
+      lines.push(`${d.dayLabel}  ${label} — ${mins} min  |  ${parts}`);
     }
   });
 
@@ -180,6 +175,48 @@ export default function ForecasterPage() {
 
   const hasPosOverride = Object.keys(posOv).length > 0;
 
+  // ── Planned sessions (from the Session page) ──────────────────────────
+  // Loaded on mount: the live current session plus everything saved via
+  // "Save session". Days linked to CURRENT_SESSION_ID update automatically
+  // as the coach edits their session.
+  const [sessionOptions, setSessionOptions] = useState<ResolvedSession[]>([]);
+
+  useEffect(() => {
+    refreshSessionOptions();
+  }, []);
+
+  function refreshSessionOptions() {
+    const opts: ResolvedSession[] = [];
+    const current = resolvePlannedSession(CURRENT_SESSION_ID);
+    if (current) opts.push(current);
+    for (const s of getSessionLibrary()) {
+      const r = resolvePlannedSession(s.id);
+      if (r) opts.push(r);
+    }
+    setSessionOptions(opts);
+  }
+
+  function handleDeleteSavedSession(id: string) {
+    removeSessionFromLibrary(id);
+    refreshSessionOptions();
+  }
+
+  /** Resolved planned session for a day, or null (benchmark / missing). */
+  function resolvedFor(day: WeekDayConfig): ResolvedSession | null {
+    if (day.type !== "training" || day.source !== "planned" || !day.plannedSessionId) {
+      return null;
+    }
+    return sessionOptions.find((o) => o.id === day.plannedSessionId) ?? null;
+  }
+
+  /** Day GPS routed through planned sessions when linked, else benchmarks. */
+  function dayGPS(day: WeekDayConfig): GPSEstimate | null {
+    if (day.type === "rest") return null;
+    if (day.type === "match") return { ...effectiveMatchGPS };
+    const resolved = resolvedFor(day);
+    return resolved ? resolved.gps : scaleSessionGPS(day.sessionType, day.durationMins);
+  }
+
   function setPosOverride(k: keyof GPSEstimate, val: number) {
     setCustomPositionOverrides(prev => ({
       ...prev,
@@ -195,17 +232,32 @@ export default function ForecasterPage() {
     });
   }
 
-  // All GPS calculations use effectiveMatchGPS — overrides flow through automatically
-  const weekGPS    = computeWeekGPS(week, effectiveMatchGPS);
+  // All GPS calculations use effectiveMatchGPS — overrides flow through
+  // automatically; planned-session days contribute their real totals
+  const zero: GPSEstimate = { distance: 0, hsr: 0, sprint: 0, accels: 0, decels: 0 };
+  const weekGPS = week.reduce((acc, d) => {
+    const gps = dayGPS(d);
+    if (!gps) return acc;
+    return {
+      distance: acc.distance + gps.distance,
+      hsr:      acc.hsr      + gps.hsr,
+      sprint:   acc.sprint   + gps.sprint,
+      accels:   acc.accels   + gps.accels,
+      decels:   acc.decels   + gps.decels,
+    };
+  }, zero);
   const weekTarget = computeWeekTarget(effectiveMatchGPS, multiplier);
 
-  // Derived summary stats
+  // Derived summary stats — planned days use their real duration and RPE
   const trainDays  = week.filter(d => d.type === "training");
   const trainCount = trainDays.length;
   const matchCount = week.filter(d => d.type === "match").length;
-  const totalMins  = trainDays.reduce((s, d) => s + d.durationMins, 0);
+  const totalMins  = trainDays.reduce(
+    (s, d) => s + (resolvedFor(d)?.durationMins ?? d.durationMins), 0);
   const avgRpe = trainCount > 0
-    ? Math.round((trainDays.reduce((s, d) => s + SESSION_TYPES[d.sessionType].rpe, 0) / trainCount) * 10) / 10
+    ? Math.round((trainDays.reduce(
+        (s, d) => s + (resolvedFor(d)?.avgRpe ?? SESSION_TYPES[d.sessionType].rpe), 0
+      ) / trainCount) * 10) / 10
     : null;
 
   function updateDay(idx: number, patch: Partial<WeekDayConfig>) {
@@ -215,7 +267,8 @@ export default function ForecasterPage() {
   function handleCopy() {
     const text = buildCopyText(
       week, weekGPS, weekTarget, effectiveMatchGPS,
-      posBase.label, multiplier, trainCount, totalMins, matchCount, avgRpe
+      posBase.label, multiplier, trainCount, totalMins, matchCount, avgRpe,
+      resolvedFor
     );
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
@@ -370,7 +423,8 @@ export default function ForecasterPage() {
           <div className="grid grid-cols-7 gap-2">
             {week.map((day, idx) => {
               const isSelected = selectedDay === idx;
-              const dayGPS = getDayGPS(day, effectiveMatchGPS);
+              const gps = dayGPS(day);
+              const resolved = resolvedFor(day);
 
               let cardClass = "rounded-xl py-3 px-1.5 flex flex-col items-center text-center gap-1 cursor-pointer transition-all select-none ";
               if (day.type === "rest") {
@@ -407,13 +461,24 @@ export default function ForecasterPage() {
 
                   {day.type === "training" && (
                     <>
-                      <p className="text-xs font-bold text-white mt-0.5 leading-tight">
-                        {SESSION_TYPES[day.sessionType].label.split(" ")[0]}
+                      {resolved ? (
+                        <p
+                          className="text-xs font-bold text-green-300 mt-0.5 leading-tight max-w-full truncate"
+                          title={resolved.name}
+                        >
+                          {resolved.name}
+                        </p>
+                      ) : (
+                        <p className="text-xs font-bold text-white mt-0.5 leading-tight">
+                          {SESSION_TYPES[day.sessionType].label.split(" ")[0]}
+                        </p>
+                      )}
+                      <p className="text-xs text-zinc-500">
+                        {(resolved?.durationMins ?? day.durationMins)}′
                       </p>
-                      <p className="text-xs text-zinc-500">{day.durationMins}′</p>
-                      {dayGPS && (
+                      {gps && (
                         <p className="text-xs font-mono text-zinc-400">
-                          {(dayGPS.distance / 1000).toFixed(1)}km
+                          {(gps.distance / 1000).toFixed(1)}km
                         </p>
                       )}
                     </>
@@ -464,10 +529,146 @@ export default function ForecasterPage() {
                 </div>
               </div>
 
-              {/* Training: session type + duration */}
+              {/* Training: benchmark vs planned session */}
               {selectedDayData.type === "training" && (
                 <>
-                  {/* Session type pills */}
+                  {/* Source toggle */}
+                  <div>
+                    <p className="text-xs text-zinc-500 mb-2">Session source</p>
+                    <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-1 w-fit">
+                      <button
+                        onClick={() => updateDay(selectedDay, { source: "benchmark" })}
+                        className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                          selectedDayData.source !== "planned"
+                            ? "bg-green-600 text-white"
+                            : "text-zinc-400 hover:text-white"
+                        }`}
+                      >
+                        Benchmark
+                      </button>
+                      <button
+                        onClick={() =>
+                          updateDay(selectedDay, {
+                            source: "planned",
+                            plannedSessionId:
+                              selectedDayData.plannedSessionId ?? sessionOptions[0]?.id,
+                          })
+                        }
+                        className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                          selectedDayData.source === "planned"
+                            ? "bg-green-600 text-white"
+                            : "text-zinc-400 hover:text-white"
+                        }`}
+                      >
+                        My planned sessions
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Planned-session picker */}
+                  {selectedDayData.source === "planned" && (
+                    <div className="space-y-3">
+                      {sessionOptions.length === 0 ? (
+                        <p className="text-xs text-zinc-500 border border-dashed border-zinc-700 rounded-lg p-3">
+                          No planned sessions yet — build one on the{" "}
+                          <a href="/" className="text-green-400 underline hover:text-green-300">
+                            Session page
+                          </a>{" "}
+                          and click &ldquo;Save session&rdquo;, then assign it here.
+                        </p>
+                      ) : (
+                        <>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {sessionOptions.map((opt) => {
+                              const isSel = selectedDayData.plannedSessionId === opt.id;
+                              const isCurrent = opt.id === CURRENT_SESSION_ID;
+                              return (
+                                <div key={opt.id} className="relative">
+                                  <button
+                                    onClick={() =>
+                                      updateDay(selectedDay, { plannedSessionId: opt.id })
+                                    }
+                                    className={`w-full text-left px-3 py-2.5 rounded-lg border text-xs transition-colors ${
+                                      isSel
+                                        ? "border-green-600 bg-green-950/50 text-green-300"
+                                        : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-white"
+                                    }`}
+                                  >
+                                    <span className="font-semibold block pr-6 truncate">
+                                      {opt.name}
+                                      {isCurrent && (
+                                        <span className="ml-1.5 font-normal text-zinc-500">
+                                          (live from Session page)
+                                        </span>
+                                      )}
+                                    </span>
+                                    <span className="text-zinc-600 block mt-0.5">
+                                      {opt.drillCount} drill{opt.drillCount !== 1 ? "s" : ""} ·{" "}
+                                      {opt.durationMins} min · RPE {opt.avgRpe} ·{" "}
+                                      ~{opt.gps.distance.toLocaleString()}m
+                                    </span>
+                                  </button>
+                                  {!isCurrent && (
+                                    <button
+                                      onClick={() => handleDeleteSavedSession(opt.id)}
+                                      title="Delete saved session"
+                                      className="absolute top-2 right-2 w-5 h-5 flex items-center justify-center rounded text-zinc-600 hover:text-red-400 hover:bg-zinc-800 transition-colors text-xs"
+                                    >
+                                      ✕
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Missing link — assigned session no longer exists */}
+                          {selectedDayData.plannedSessionId &&
+                            !sessionOptions.some(
+                              (o) => o.id === selectedDayData.plannedSessionId
+                            ) && (
+                              <p className="text-xs text-amber-400">
+                                The session linked to this day no longer exists — pick
+                                another, or the day falls back to the{" "}
+                                {SESSION_TYPES[selectedDayData.sessionType].label} benchmark.
+                              </p>
+                            )}
+
+                          {/* Resolved GPS strip */}
+                          {(() => {
+                            const r = resolvedFor(selectedDayData);
+                            if (!r) return null;
+                            return (
+                              <div>
+                                <p className="text-xs text-zinc-500 mb-2">
+                                  Planned GPS{" "}
+                                  <span className="text-zinc-700">
+                                    (from your actual drills — not a benchmark)
+                                  </span>
+                                </p>
+                                <div className="grid grid-cols-5 gap-2">
+                                  {METRICS.map((m) => (
+                                    <div
+                                      key={m.key}
+                                      className="bg-zinc-900 border border-green-900/30 rounded-lg p-2 text-center"
+                                    >
+                                      <p className="text-xs text-zinc-500">{m.label}</p>
+                                      <p className="text-xs font-mono font-semibold text-green-400 mt-0.5">
+                                        ~{r.gps[m.key].toLocaleString()}{m.unit}
+                                      </p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Benchmark controls: session type + duration + estimate */}
+                  {selectedDayData.source !== "planned" && (<>
                   <div>
                     <p className="text-xs text-zinc-500 mb-2">Session type</p>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -531,6 +732,7 @@ export default function ForecasterPage() {
                       })}
                     </div>
                   </div>
+                  </>)}
                 </>
               )}
 
