@@ -8,6 +8,7 @@ import {
   type GPSEstimate,
 } from "@/lib/gps-targets";
 import { saveToLibrary } from "@/lib/drill-library";
+import { usePersistentState } from "@/lib/use-persistent-state";
 
 export type Drill = {
   id: string;
@@ -198,18 +199,20 @@ export default function SessionPlanner({
   onUpdateDrill,
   onTotalsChange,
 }: SessionPlannerProps) {
-  const [mode, setMode] = useState<"session" | "position">("session");
-  const [sessionKey, setSessionKey] = useState("intensive");
-  const [positionKey, setPositionKey] = useState("average");
-  const [matchPct, setMatchPct] = useState(60);
+  // Target selection persists across visits — a coach sets this up once
+  const [mode, setMode] = usePersistentState<"session" | "position">("pitch-planner-target-mode", "session");
+  const [sessionKey, setSessionKey] = usePersistentState("pitch-planner-session-type", "intensive");
+  const [positionKey, setPositionKey] = usePersistentState("pitch-planner-position", "average");
+  const [matchPct, setMatchPct] = usePersistentState("pitch-planner-match-pct", 60);
   const [expandedDrill, setExpandedDrill] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
 
   // ── Editable session-type targets ────────────────────────────────────────
-  const [customOverrides, setCustomOverrides] = useState<
+  // Persisted — squad-specific targets are the most painful thing to re-enter
+  const [customOverrides, setCustomOverrides] = usePersistentState<
     Record<string, Partial<GPSEstimate>>
-  >({});
+  >("pitch-planner-session-overrides", {});
   const [editingTarget, setEditingTarget] = useState(false);
 
   const baseSessionTarget = SESSION_TYPES[sessionKey];
@@ -223,9 +226,10 @@ export default function SessionPlanner({
   };
 
   // ── Editable match-day demands (position tab) ─────────────────────────
-  const [customPositionOverrides, setCustomPositionOverrides] = useState<
+  // Shares a key with the Week forecaster — edit squad data once, applies everywhere
+  const [customPositionOverrides, setCustomPositionOverrides] = usePersistentState<
     Record<string, Partial<GPSEstimate>>
-  >({});
+  >("pitch-planner-position-overrides", {});
   const [editingPosition, setEditingPosition] = useState(false);
 
   const basePosition = POSITION_DATA[positionKey];

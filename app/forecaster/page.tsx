@@ -7,6 +7,7 @@ import {
   METRICS,
   type GPSEstimate,
 } from "@/lib/gps-targets";
+import { usePersistentState } from "@/lib/use-persistent-state";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 type DayType = "rest" | "training" | "match";
@@ -151,16 +152,18 @@ function buildCopyText(
 
 // ── Component ─────────────────────────────────────────────────────────────
 export default function ForecasterPage() {
-  const [week, setWeek]               = useState<WeekDayConfig[]>(DEFAULT_WEEK);
+  // Week plan and targets persist across visits — plan Monday, tweak Thursday
+  const [week, setWeek]               = usePersistentState<WeekDayConfig[]>("pitch-planner-week", DEFAULT_WEEK);
   const [selectedDay, setSelectedDay] = useState<number | null>(1); // open Tue by default
-  const [position, setPosition]       = useState("average");
-  const [multiplier, setMultiplier]   = useState(3.5);
+  const [position, setPosition]       = usePersistentState("pitch-planner-week-position", "average");
+  const [multiplier, setMultiplier]   = usePersistentState("pitch-planner-week-multiplier", 3.5);
   const [copied, setCopied]           = useState(false);
 
   // ── Editable match-day demands ────────────────────────────────────────
-  const [customPositionOverrides, setCustomPositionOverrides] = useState<
+  // Shares a key with the Session planner — edit squad data once, applies everywhere
+  const [customPositionOverrides, setCustomPositionOverrides] = usePersistentState<
     Record<string, Partial<GPSEstimate>>
-  >({});
+  >("pitch-planner-position-overrides", {});
   const [editingPosition, setEditingPosition] = useState(false);
 
   const posBase = POSITION_DATA[position];

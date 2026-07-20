@@ -160,7 +160,54 @@ export default function PitchCanvas({ seed, seedVersion, snapEnabled, onAddDrill
     ? Math.min(GRID_W / seed.length, GRID_H / seed.width) * 0.88
     : Math.min(GRID_W, GRID_H) / 70;
 
+  // ── Shape persistence ───────────────────────────────────────────────────
+  // The drawn polygon survives a refresh. Restore runs once on mount; the
+  // seed effect below only fires on a real seedVersion change (a reference
+  // card click or Reset), so it never overwrites a restored custom shape.
+  const SHAPE_KEY = "pitch-planner-shape";
+  const skipShapeSave = useRef(true);
+  const prevSeedVersion = useRef(seedVersion);
+
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SHAPE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) as { vertices: Point[]; isClosed: boolean };
+        if (Array.isArray(saved.vertices) && saved.vertices.length >= 3) {
+          setVertices(saved.vertices);
+          setIsClosed(saved.isClosed);
+          setHistory([saved.vertices]);
+        }
+      }
+    } catch {
+      // corrupted or unavailable — start fresh
+    }
+  }, []);
+
+  useEffect(() => {
+    // Skip the mount run so the default empty shape never clobbers a saved
+    // one before it has loaded; skip mid-drag so we only write on release.
+    if (skipShapeSave.current) {
+      skipShapeSave.current = false;
+      return;
+    }
+    if (draggingIdx !== null) return;
+    try {
+      localStorage.setItem(SHAPE_KEY, JSON.stringify({ vertices, isClosed }));
+    } catch {
+      // storage full or unavailable — fail silently
+    }
+  }, [vertices, isClosed, draggingIdx]);
+
+  useEffect(() => {
+    return () => {
+      skipShapeSave.current = true; // re-arm on StrictMode dev remount
+    };
+  }, []);
+
+  useEffect(() => {
+    if (prevSeedVersion.current === seedVersion) return; // mount — keep restored shape
+    prevSeedVersion.current = seedVersion;
     if (seed) {
       const rect: Point[] = [
         { x: 0, y: 0 },

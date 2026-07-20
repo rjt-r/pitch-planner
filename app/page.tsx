@@ -9,6 +9,7 @@ import DrillLibrary from "@/components/DrillLibrary";
 import { estimateGPSRange, type GPSRangeEstimate, type GPSEstimate, METRICS } from "@/lib/gps-targets";
 import type { SeedConfig } from "@/components/ReferencePanel";
 import type { LibraryDrill } from "@/lib/drill-library";
+import { usePersistentState } from "@/lib/use-persistent-state";
 
 function StepHeader({ n, title, subtitle }: { n: number; title: string; subtitle?: string }) {
   return (
@@ -343,14 +344,15 @@ function LibraryLoadModal({
 
 // ── Page ──────────────────────────────────────────────────────────────────
 export default function PitchPlannerPage() {
-  const [format, setFormat] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [seed, setSeed] = useState<SeedConfig | null>(null);
+  // Persisted so a refresh (or coming back tomorrow) restores the session
+  const [format, setFormat] = usePersistentState<string | null>("pitch-planner-format", null);
+  const [selectedKey, setSelectedKey] = usePersistentState<string | null>("pitch-planner-ref-key", null);
+  const [seed, setSeed] = usePersistentState<SeedConfig | null>("pitch-planner-seed", null);
   const [seedVersion, setSeedVersion] = useState(0);
   const [snapEnabled, setSnapEnabled] = useState(true);
 
-  // Session planner state
-  const [drills, setDrills] = useState<Drill[]>([]);
+  // Session planner state — persisted with the session
+  const [drills, setDrills] = usePersistentState<Drill[]>("pitch-planner-session-drills", []);
   const [pendingDrill, setPendingDrill] = useState<PendingDrill | null>(null);
   // Library load state
   const [libraryDrill, setLibraryDrill] = useState<LibraryDrill | null>(null);
