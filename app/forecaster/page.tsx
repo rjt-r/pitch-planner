@@ -884,7 +884,9 @@ export default function ForecasterPage() {
       </div>
 
       <footer className="border-t border-zinc-900 py-5 text-center text-xs text-zinc-700 mt-8">
-        Pitch Planner · Based on Riboli et al. (2020) · Built for women&apos;s football coaches
+        Pitch Planner · Based on{" "}
+        <a href="/methods" className="underline hover:text-zinc-400">Riboli et al. (2020)</a>{" "}
+        · Built for women&apos;s football coaches
       </footer>
     </main>
   );

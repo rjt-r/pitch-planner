@@ -21,6 +21,7 @@ export default function AppNav() {
           {[
             { href: "/",           label: "Session" },
             { href: "/forecaster", label: "Week"    },
+            { href: "/methods",    label: "Methods" },
           ].map(({ href, label }) => {
             const active = pathname === href;
             return (

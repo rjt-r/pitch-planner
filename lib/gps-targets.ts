@@ -158,7 +158,7 @@ export type GPSRangeEstimate = {
   [K in keyof GPSEstimate]: { low: number; mid: number; high: number };
 };
 
-const UNCERTAINTY: Record<keyof GPSEstimate, number> = {
+export const UNCERTAINTY: Record<keyof GPSEstimate, number> = {
   distance: 0.15, // ±15% — most stable; mainly work-rate dependent
   hsr:      0.30, // ±30% — depends on acceleration opportunities in the space
   sprint:   0.40, // ±40% — highest uncertainty; threshold-sensitive & context-dependent
