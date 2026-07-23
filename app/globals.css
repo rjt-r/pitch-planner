@@ -5,3 +5,40 @@ body {
   color: #fafafa;
   font-family: system-ui, -apple-system, sans-serif;
 }
+
+/* ── Session print sheet ──────────────────────────────────────────────────
+   Hidden on screen; when printing, it becomes the only visible content so
+   the browser's "Save as PDF" produces a clean one-page session plan. */
+#session-print-sheet {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
+  }
+
+  body {
+    background: white !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  #session-print-sheet,
+  #session-print-sheet * {
+    visibility: visible;
+  }
+
+  #session-print-sheet {
+    display: block !important;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
