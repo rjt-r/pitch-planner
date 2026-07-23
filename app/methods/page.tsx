@@ -65,7 +65,7 @@ export default function MethodsPage() {
           </h2>
           <p className="text-sm text-amber-100/80 leading-relaxed">
             These benchmarks describe <em>populations</em> of players in published research.
-            Your squad is not that population — age, competitive level, fitness, and playing
+            Your squad is not that population — age, sex, competitive level, fitness, and playing
             style all shift the real numbers. Treat every default here as a{" "}
             <strong className="text-amber-200">calibration starting point</strong>, and where
             you have your own GPS data, use the edit controls to overwrite ours. The app is
@@ -86,10 +86,16 @@ export default function MethodsPage() {
             based on{" "}
             <strong className="text-zinc-200">Riboli et al. (2020)</strong>, whose work related
             physical match performance to relative pitch area in{" "}
-            <strong className="text-zinc-200">women&apos;s football</strong>. Because that cohort
-            matches this app&apos;s intended users, the pitch dimensions are population-appropriate
-            — but individual squads still vary, which is why every seeded shape is fully editable.
+            <strong className="text-zinc-200">elite men&apos;s football</strong>.
           </p>
+          <div className="bg-amber-950/20 border border-amber-800/30 rounded-lg p-3 text-amber-100/80">
+            <strong className="text-amber-200">Important:</strong> those benchmarks come from the
+            men&apos;s game, while this app is built for women&apos;s football. Women&apos;s match
+            demands differ — particularly high-speed running and sprint distances, which track
+            lower peak velocities. So treat the pitch sizes as a research-backed{" "}
+            <em>starting point</em> to validate against your own squad, not a women&apos;s-specific
+            standard. Every seeded shape is fully editable for exactly this reason.
+          </div>
           <p className="text-zinc-500">
             On the canvas, the RPA traffic-light compares your drawn shape to the Riboli reference
             for that format:{" "}
@@ -263,8 +269,10 @@ export default function MethodsPage() {
         <Section n="—" title="References">
           <p>
             Riboli, A., et al. (2020). Research relating physical match performance to relative
-            pitch area in women&apos;s football, underpinning the SSG/MSG/LSG reference sizes and
-            the direction of the RPA-to-GPS relationships used here.
+            pitch area in <strong className="text-zinc-300">elite men&apos;s football</strong>,
+            underpinning the SSG/MSG/LSG reference sizes and the direction of the RPA-to-GPS
+            relationships used here. Applied to the women&apos;s game as a starting point (see
+            section 01).
           </p>
           <p className="text-zinc-600 text-xs italic">
             Full citation and any additional sources for the position reference values to be
