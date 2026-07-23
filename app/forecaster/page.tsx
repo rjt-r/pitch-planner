@@ -8,6 +8,7 @@ import {
   type GPSEstimate,
 } from "@/lib/gps-targets";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import { loadBand, BAND_STYLES } from "@/lib/load-bands";
 import {
   getSessionLibrary,
   removeSessionFromLibrary,
@@ -123,12 +124,13 @@ function buildCopyText(
   METRICS.forEach((m) => {
     const actual = weekGPS[m.key];
     const target = weekTarget[m.key];
-    const pct    = target > 0 ? Math.round((actual / target) * 100) : 0;
+    const band   = loadBand(actual, target, { flagUnder: true });
+    const flag   = band.band !== "on" && band.label ? ` — ${band.label}` : "";
     const matchX = effectiveMatchGPS[m.key] > 0
       ? (actual / effectiveMatchGPS[m.key]).toFixed(1) + "× match"
       : "—";
     lines.push(
-      `  ${m.label.padEnd(10)} ~${actual.toLocaleString()}${m.unit}  /  ${target.toLocaleString()}${m.unit} target  (${pct}%)   ${matchX}`
+      `  ${m.label.padEnd(10)} ~${actual.toLocaleString()}${m.unit}  /  ${target.toLocaleString()}${m.unit} target  (${band.pct}%${flag})   ${matchX}`
     );
   });
 
@@ -810,13 +812,13 @@ export default function ForecasterPage() {
             ))}
           </div>
 
-          {/* Metric bars */}
+          {/* Metric bars — banded vs target; a finished week under 90% gets a cue too */}
           <div className="space-y-4">
             {METRICS.map(m => {
               const actual   = weekGPS[m.key];
               const target   = weekTarget[m.key];
-              const pct      = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
-              const over     = actual >= target && target > 0;
+              const band     = loadBand(actual, target, { flagUnder: true });
+              const style    = band.band !== "none" ? BAND_STYLES[band.band] : null;
               const matchVal = effectiveMatchGPS[m.key];
               const matchX   = matchVal > 0 ? (actual / matchVal).toFixed(1) + "×" : "—";
 
@@ -825,26 +827,33 @@ export default function ForecasterPage() {
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-medium text-zinc-400">{m.label}</span>
                     <div className="flex items-center gap-4">
-                      <span className={`text-xs font-mono ${over ? "text-green-400" : "text-zinc-300"}`}>
+                      <span className={`text-xs font-mono ${style ? style.text : "text-zinc-300"}`}>
                         ~{actual.toLocaleString()}{m.unit}
                         {" / "}
                         {target.toLocaleString()}{m.unit}
-                        {over && <span className="ml-1 text-green-500">✓</span>}
+                        {band.label && <span className="ml-1.5">{band.label}</span>}
                       </span>
-                      <span className="text-xs font-semibold text-green-400 w-16 text-right tabular-nums">
+                      <span className="text-xs font-semibold text-zinc-400 w-16 text-right tabular-nums">
                         {matchX} match
                       </span>
                     </div>
                   </div>
                   <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
                     <div
-                      className={`h-full rounded-full transition-all duration-300 ${over ? "bg-green-400" : m.color}`}
-                      style={{ width: `${pct}%` }}
+                      className={`h-full rounded-full transition-all duration-300 ${style ? style.bar : m.color}`}
+                      style={{ width: `${Math.min(100, band.pct)}%` }}
                     />
                   </div>
                 </div>
               );
             })}
+            {/* Band legend */}
+            <p className="text-xs text-zinc-600">
+              vs weekly target: <span className="text-sky-400">●</span> &lt;90% under ·{" "}
+              <span className="text-green-500">●</span> within ±10% ·{" "}
+              <span className="text-amber-400">●</span> ≤+30% over ·{" "}
+              <span className="text-red-400">●</span> &gt;+30% over
+            </p>
           </div>
 
           {/* No activity note */}

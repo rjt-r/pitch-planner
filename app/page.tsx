@@ -8,6 +8,7 @@ import SessionPlanner, { type Drill } from "@/components/SessionPlanner";
 import DrillLibrary from "@/components/DrillLibrary";
 import SessionPrintSheet from "@/components/SessionPrintSheet";
 import { estimateGPSRange, type GPSRangeEstimate, type GPSEstimate, METRICS } from "@/lib/gps-targets";
+import { loadBand, BAND_STYLES } from "@/lib/load-bands";
 import type { SeedConfig } from "@/components/ReferencePanel";
 import type { LibraryDrill } from "@/lib/drill-library";
 import { usePersistentState } from "@/lib/use-persistent-state";
@@ -362,13 +363,15 @@ export default function PitchPlannerPage() {
   const [stickyTotals, setStickyTotals] = useState<GPSEstimate | null>(null);
   const [stickyTargets, setStickyTargets] = useState<GPSEstimate | null>(null);
   const [targetLabel, setTargetLabel] = useState<string | null>(null);
+  const [strictBands, setStrictBands] = useState(false);
   const sessionRef = useRef<HTMLDivElement>(null);
 
   const handleTotalsChange = useCallback(
-    (totals: GPSEstimate, targets: GPSEstimate, label: string) => {
+    (totals: GPSEstimate, targets: GPSEstimate, label: string, strict: boolean) => {
       setStickyTotals(totals);
       setStickyTargets(targets);
       setTargetLabel(label);
+      setStrictBands(strict);
     },
     []
   );
@@ -566,6 +569,7 @@ export default function PitchPlannerPage() {
         totals={stickyTotals}
         targets={stickyTargets}
         targetLabel={targetLabel}
+        strictBands={strictBands}
       />
 
       {/* ── Drill detail modal ── */}
@@ -608,20 +612,24 @@ export default function PitchPlannerPage() {
               {METRICS.filter((m) => m.key !== "sprint").map((m) => {
                 const actual = stickyTotals[m.key];
                 const target = stickyTargets[m.key];
-                const pct = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
-                const done = target > 0 && actual >= target;
+                const band = loadBand(actual, target, { strict: strictBands });
+                const style = band.band !== "none" ? BAND_STYLES[band.band] : null;
                 return (
                   <div key={m.key} className="min-w-0">
                     <div className="flex items-center justify-between mb-0.5">
                       <span className="text-xs text-zinc-500">{m.label}</span>
-                      <span className={`text-xs font-mono ${done ? "text-green-400" : "text-zinc-400"}`}>
-                        {done ? "✓" : `${Math.round(pct)}%`}
+                      <span className={`text-xs font-mono ${style ? style.text : "text-zinc-400"}`}>
+                        {band.band === "on"
+                          ? "✓"
+                          : band.band === "amber" || band.band === "red"
+                          ? `+${band.pct - 100}%`
+                          : `${band.pct}%`}
                       </span>
                     </div>
                     <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
                       <div
-                        className={`h-full rounded-full transition-all duration-300 ${done ? "bg-green-400" : m.color}`}
-                        style={{ width: `${pct}%` }}
+                        className={`h-full rounded-full transition-all duration-300 ${style ? style.bar : m.color}`}
+                        style={{ width: `${Math.min(100, band.pct)}%` }}
                       />
                     </div>
                   </div>

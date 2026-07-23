@@ -6,6 +6,7 @@
 // the coach's shareable PDF. Light colours on white — ink-friendly.
 
 import { METRICS, type GPSEstimate } from "@/lib/gps-targets";
+import { loadBand } from "@/lib/load-bands";
 import type { Drill } from "@/components/SessionPlanner";
 import type { SeedConfig } from "@/components/ReferencePanel";
 
@@ -110,6 +111,7 @@ export default function SessionPrintSheet({
   totals,
   targets,
   targetLabel,
+  strictBands,
 }: {
   format: string | null;
   seed: SeedConfig | null;
@@ -118,6 +120,7 @@ export default function SessionPrintSheet({
   totals: GPSEstimate | null;
   targets: GPSEstimate | null;
   targetLabel: string | null;
+  strictBands?: boolean;
 }) {
   const date = new Date().toLocaleDateString("en-GB", {
     weekday: "long",
@@ -134,8 +137,19 @@ export default function SessionPrintSheet({
       ? Math.round((drills.reduce((s, d) => s + d.rpe, 0) / drills.length) * 10) / 10
       : 0;
 
-  const pct = (a: number, t: number) =>
-    t > 0 ? `${Math.round((a / t) * 100)}%` : "—";
+  // Same banding as on screen — over-target loads are flagged, not celebrated
+  function pctCell(a: number, t: number) {
+    if (t <= 0) return <span>—</span>;
+    const band = loadBand(a, t, { strict: strictBands });
+    if (band.band === "amber" || band.band === "red") {
+      return (
+        <span className={band.band === "red" ? "text-red-700 font-bold" : "text-amber-700 font-bold"}>
+          {band.pct}% ({band.label})
+        </span>
+      );
+    }
+    return <span>{band.pct}%</span>;
+  }
 
   return (
     <div id="session-print-sheet" className="bg-white text-zinc-900">
@@ -271,7 +285,7 @@ export default function SessionPrintSheet({
                   <td className="py-1 pr-2 text-zinc-500">% of target</td>
                   {METRICS.map((m) => (
                     <td key={m.key} className="py-1 pr-2 text-right font-semibold">
-                      {pct(totals[m.key], targets[m.key])}
+                      {pctCell(totals[m.key], targets[m.key])}
                     </td>
                   ))}
                 </tr>

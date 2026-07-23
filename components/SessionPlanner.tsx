@@ -10,6 +10,7 @@ import {
 import { saveToLibrary } from "@/lib/drill-library";
 import { saveSessionToLibrary } from "@/lib/session-library";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import { loadBand, BAND_STYLES } from "@/lib/load-bands";
 
 export type Drill = {
   id: string;
@@ -28,7 +29,12 @@ interface SessionPlannerProps {
   onRemoveDrill: (id: string) => void;
   onUpdateDrill: (id: string, updates: Partial<Drill>) => void;
   /** Fires whenever totals or targets change — used by parent to drive sticky bar */
-  onTotalsChange?: (totals: GPSEstimate, targets: GPSEstimate, targetLabel: string) => void;
+  onTotalsChange?: (
+    totals: GPSEstimate,
+    targets: GPSEstimate,
+    targetLabel: string,
+    strictBands: boolean
+  ) => void;
   /** When set, shows an "Export PDF" button in the export bar */
   onExportPdf?: () => void;
 }
@@ -53,6 +59,7 @@ function ProgressBar({
   target,
   colorClass,
   zeroNote,
+  strict,
 }: {
   label: string;
   unit: string;
@@ -60,6 +67,7 @@ function ProgressBar({
   target: number;
   colorClass: string;
   zeroNote?: string; // shown when target === 0 instead of a bar
+  strict?: boolean;  // MD-1/MD-2 — targets are ceilings, overshoot flags immediately
 }) {
   // When target is 0 (e.g. Sprint in SSG sessions), show an explanatory note
   if (target === 0) {
@@ -74,23 +82,23 @@ function ProgressBar({
     );
   }
 
-  const pct = Math.min(100, (actual / target) * 100);
-  const over = actual >= target;
-  const barColor = over ? "bg-green-400" : colorClass;
+  const band = loadBand(actual, target, { strict });
+  const style = band.band !== "none" ? BAND_STYLES[band.band] : null;
+  const barColor = style ? style.bar : colorClass;
 
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-medium text-zinc-400">{label}</span>
-        <span className={`text-xs font-mono ${over ? "text-green-400" : "text-zinc-300"}`}>
+        <span className={`text-xs font-mono ${style ? style.text : "text-zinc-300"}`}>
           ~{actual.toLocaleString()}{unit} / {target.toLocaleString()}{unit}
-          {over && <span className="ml-1 text-green-500">✓</span>}
+          {band.label && <span className="ml-1.5">{band.label}</span>}
         </span>
       </div>
       <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-300 ${barColor}`}
-          style={{ width: `${pct}%` }}
+          style={{ width: `${Math.min(100, band.pct)}%` }}
         />
       </div>
     </div>
@@ -142,8 +150,13 @@ function buildClipboardText(
     );
   });
 
-  const pct = (a: number, t: number) =>
-    t > 0 ? ` (${Math.round((a / t) * 100)}%)` : "";
+  const strict = mode === "session" && (sessionKey === "md1" || sessionKey === "md2");
+  const pct = (a: number, t: number) => {
+    if (t <= 0) return "";
+    const band = loadBand(a, t, { strict });
+    const flag = band.band === "amber" || band.band === "red" ? ` — ${band.label}` : "";
+    return ` (${band.pct}%${flag})`;
+  };
 
   lines.push(
     `TOTALS`,
@@ -262,6 +275,10 @@ export default function SessionPlanner({
           decels:   Math.round(effectivePosition.decels   * (matchPct / 100)),
         };
 
+  // MD-1/MD-2 targets are ceilings — any overshoot gets flagged immediately
+  const strictBands =
+    mode === "session" && (sessionKey === "md1" || sessionKey === "md2");
+
   const totals = sumGPS(drills);
   const totalDuration = drills.reduce((s, d) => s + d.durationMins, 0);
   const avgRpe =
@@ -274,10 +291,11 @@ export default function SessionPlanner({
     onTotalsChange?.(
       totals,
       targets,
-      targetLabel(mode, sessionKey, positionKey, matchPct, targets)
+      targetLabel(mode, sessionKey, positionKey, matchPct, targets),
+      strictBands
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drills, targets.distance, targets.hsr, targets.sprint, targets.accels, targets.decels]);
+  }, [drills, targets.distance, targets.hsr, targets.sprint, targets.accels, targets.decels, strictBands]);
 
   function setOverride(k: keyof GPSEstimate, val: number) {
     setCustomOverrides((prev) => ({
@@ -598,6 +616,7 @@ export default function SessionPlanner({
             actual={totals[m.key]}
             target={targets[m.key]}
             colorClass={m.color}
+            strict={strictBands}
             zeroNote={
               m.key === "sprint" && targets[m.key] === 0
                 ? "not targeted in tight spaces — use Extensive or Match Load %"
@@ -605,6 +624,24 @@ export default function SessionPlanner({
             }
           />
         ))}
+        {/* Band legend — same traffic-light convention as the RPA panel */}
+        <p className="text-xs text-zinc-600 pt-1">
+          {strictBands ? (
+            <>
+              <span className="text-amber-500">Recovery / match-prep day:</span>{" "}
+              targets are ceilings —{" "}
+              <span className="text-green-500">●</span> ≤100% ·{" "}
+              <span className="text-amber-400">●</span> over ·{" "}
+              <span className="text-red-400">●</span> &gt;+15%
+            </>
+          ) : (
+            <>
+              vs target: <span className="text-green-500">●</span> within ±10% ·{" "}
+              <span className="text-amber-400">●</span> ≤+30% over ·{" "}
+              <span className="text-red-400">●</span> &gt;+30% over
+            </>
+          )}
+        </p>
         {drills.length === 0 ? (
           <p className="text-xs text-zinc-600 text-center pt-2">
             Add drills from the canvas above to see your session GPS totals
